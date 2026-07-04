@@ -45,13 +45,6 @@ The command creates an `AICompanion` `ServerPlayerEntity` using an internal fake
 
 ## Development Build
 
-On this development machine, use the D drive JDK and keep Gradle caches on D drive:
-
-```powershell
-$env:JAVA_HOME='D:\WorkHelper\Java\JDK-21'
-$env:GRADLE_USER_HOME='D:\tools\gradle-home'
-.\gradlew.bat build --no-daemon
-```
 
 The first build can be slow because Fabric Loom downloads Minecraft, mappings, Fabric dependencies, and remaps jars. Normal mod users do not run Gradle; they only use the built mod jar.
 
