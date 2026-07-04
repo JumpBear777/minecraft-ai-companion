@@ -113,16 +113,53 @@ Skills:
 
 ## 7. Current Sprint
 
-Sprint 1 goal: bootstrap the project.
+Sprint 1 goal: technical feasibility study for the in-game companion representation.
 
-Do not implement gameplay yet.
+Do not implement AI gameplay yet.
 
 Focus on:
 
-- Repository
-- Architecture
-- Project structure
-- Agent skeleton
+- Player-like representation
+- Vanilla compatibility
+- Server-side autonomy feasibility
+- Debug commands that prove or disprove Minecraft mechanics
+- Documentation of risks before AI systems are built
+
+Current architecture direction:
+
+Use a server-side `ServerPlayerEntity` with a local fake `ClientConnection`.
+
+This is intentionally not a chatbot, not a command NPC, and not yet an autonomous AI. It is a technical probe for whether a non-networked player-like entity can become the body of the future companion.
+
+Verified so far:
+
+- Companion can join and leave the world.
+- Companion is represented as a `ServerPlayerEntity`.
+- Companion has health, hunger, XP, inventory, main hand, offhand, and equipment slots.
+- Companion can be damaged in survival mode.
+- Companion can receive inventory items.
+- Companion can show swing animation and block breaking cracks.
+- Companion can perform delayed visual mining.
+- Armor/tool server state works and can trigger vanilla advancement state.
+- Food can be applied mechanically, but instant eating is not player-like enough.
+
+Known current risks:
+
+- Fake players do not receive real client movement packets.
+- Gravity and velocity behavior must be verified and may need server-driven movement.
+- Equipment exists server-side but may require explicit client synchronization for rendering.
+- Duration-based item use must be ticked instead of calling `finishUsing` directly.
+- Block placement needs better `BlockHitResult` and final-world-state debugging.
+
+Current debug commands to test next:
+
+```text
+/aicompanion gravity_test
+/aicompanion velocity_test
+/aicompanion sync_equipment
+/aicompanion use_item_visual
+/aicompanion place_front_debug
+```
 
 ## 8. First MVP
 

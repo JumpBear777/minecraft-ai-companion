@@ -11,6 +11,7 @@ public final class MinecraftAiCompanionMod implements ModInitializer {
     @Override
     public void onInitialize() {
         CompanionMiningTasks.register();
+        CompanionBehaviorTestTasks.register();
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> registerCommands(dispatcher));
     }
 
