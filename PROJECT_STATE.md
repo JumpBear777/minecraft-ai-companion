@@ -141,15 +141,29 @@ Verified so far:
 - Companion can show swing animation and block breaking cracks.
 - Companion can perform delayed visual mining.
 - Armor/tool server state works and can trigger vanilla advancement state.
-- Food can be applied mechanically, but instant eating is not player-like enough.
+- Explicit equipment synchronization can make armor and held weapons visible.
+- Food can be applied mechanically, and duration-based item use can be represented with a ticked task.
+- Block placement works through vanilla-style player interaction.
+- Server-driven gravity can make the companion fall and land.
+- Server-driven knockback can create a small backward hop for debug damage and manual player attacks.
 
 Known current risks:
 
 - Fake players do not receive real client movement packets.
-- Gravity and velocity behavior must be verified and may need server-driven movement.
-- Equipment exists server-side but may require explicit client synchronization for rendering.
+- Natural gravity, velocity, and knockback do not happen automatically for the fake player.
+- Movement, gravity, and knockback need server-driven adapter logic.
+- Equipment and main-hand changes require explicit client synchronization for rendering.
 - Duration-based item use must be ticked instead of calling `finishUsing` directly.
 - Block placement needs better `BlockHitResult` and final-world-state debugging.
+
+Latest implementation response:
+
+- `give_food`, `give_blocks`, and `equip_tool` now use `setStackInHand` plus explicit equipment synchronization.
+- `equip_armor` now synchronizes equipment immediately.
+- `gravity_test` now starts a server-driven fall from the current position.
+- `velocity_test` uses server-driven horizontal movement as a diagnostic command.
+- `hurt_visual` and manual player attacks now use a server-driven backward hop.
+- `place_front_debug` reports support block, target block, action result, stack count, and final world state.
 
 Current debug commands to test next:
 

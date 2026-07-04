@@ -165,8 +165,8 @@ public final class CompanionDebugCommands {
 
         ServerPlayerEntity player = companion.get();
         ItemStack stack = new ItemStack(Items.OAK_PLANKS, 16);
-        player.getInventory().setSelectedStack(stack);
-        source.sendFeedback(() -> Text.literal("Put 16 oak planks in AICompanion main hand."), true);
+        setMainHandAndSync(player, stack);
+        source.sendFeedback(() -> Text.literal("Put 16 oak planks in AICompanion main hand and synced equipment."), true);
         return 1;
     }
 
@@ -178,10 +178,10 @@ public final class CompanionDebugCommands {
         }
 
         ServerPlayerEntity player = companion.get();
-        player.getInventory().setSelectedStack(new ItemStack(Items.APPLE, 4));
+        setMainHandAndSync(player, new ItemStack(Items.APPLE, 4));
         player.getHungerManager().setFoodLevel(12);
         player.getHungerManager().setSaturationLevel(0.0F);
-        source.sendFeedback(() -> Text.literal("Put 4 apples in AICompanion main hand and lowered hunger for eating test."), true);
+        source.sendFeedback(() -> Text.literal("Put 4 apples in AICompanion main hand, synced equipment, and lowered hunger for eating test."), true);
         return 1;
     }
 
@@ -212,7 +212,9 @@ public final class CompanionDebugCommands {
         boolean damaged = player.damage(player.getEntityWorld(), player.getEntityWorld().getDamageSources().generic(), 1.0F);
         player.getEntityWorld().sendEntityStatus(player, (byte) 2);
         player.getEntityWorld().sendEntityDamage(player, player.getEntityWorld().getDamageSources().generic());
-        player.takeKnockback(0.4D, -player.getHorizontalFacing().getOffsetX(), -player.getHorizontalFacing().getOffsetZ());
+        Direction facing = player.getHorizontalFacing();
+        Vec3d knockback = new Vec3d(-facing.getOffsetX() * 0.25D, 0.12D, -facing.getOffsetZ() * 0.25D);
+        CompanionBehaviorTestTasks.applyKnockbackHop(player, source, knockback);
         sendVelocityToNearbyPlayers(player);
         float after = player.getHealth();
         source.sendFeedback(() -> Text.literal(String.format("Hurt visual: damaged=%s health %.1f -> %.1f", damaged, before, after)), true);
@@ -261,7 +263,7 @@ public final class CompanionDebugCommands {
             return 0;
         }
 
-        companion.get().setStackInHand(Hand.MAIN_HAND, new ItemStack(Items.IRON_AXE));
+        setMainHandAndSync(companion.get(), new ItemStack(Items.IRON_AXE));
         source.sendFeedback(() -> Text.literal("Equipped AICompanion with an iron axe."), true);
         return 1;
     }
@@ -278,7 +280,8 @@ public final class CompanionDebugCommands {
         player.equipStack(EquipmentSlot.CHEST, new ItemStack(Items.IRON_CHESTPLATE));
         player.equipStack(EquipmentSlot.LEGS, new ItemStack(Items.IRON_LEGGINGS));
         player.equipStack(EquipmentSlot.FEET, new ItemStack(Items.IRON_BOOTS));
-        source.sendFeedback(() -> Text.literal("Equipped AICompanion with iron armor."), true);
+        int receivers = syncEquipmentToNearbyPlayers(player);
+        source.sendFeedback(() -> Text.literal("Equipped AICompanion with iron armor and synced equipment: receivers=" + receivers), true);
         return 1;
     }
 
@@ -290,15 +293,7 @@ public final class CompanionDebugCommands {
         }
 
         ServerPlayerEntity player = companion.get();
-        List<Pair<EquipmentSlot, ItemStack>> equipment = List.of(
-                Pair.of(EquipmentSlot.MAINHAND, player.getEquippedStack(EquipmentSlot.MAINHAND).copy()),
-                Pair.of(EquipmentSlot.OFFHAND, player.getEquippedStack(EquipmentSlot.OFFHAND).copy()),
-                Pair.of(EquipmentSlot.HEAD, player.getEquippedStack(EquipmentSlot.HEAD).copy()),
-                Pair.of(EquipmentSlot.CHEST, player.getEquippedStack(EquipmentSlot.CHEST).copy()),
-                Pair.of(EquipmentSlot.LEGS, player.getEquippedStack(EquipmentSlot.LEGS).copy()),
-                Pair.of(EquipmentSlot.FEET, player.getEquippedStack(EquipmentSlot.FEET).copy()));
-        EntityEquipmentUpdateS2CPacket packet = new EntityEquipmentUpdateS2CPacket(player.getId(), equipment);
-        int receivers = sendToNearbyPlayers(player, packet);
+        int receivers = syncEquipmentToNearbyPlayers(player);
         source.sendFeedback(() -> Text.literal("Synced equipment to nearby players: receivers=" + receivers), true);
         return receivers > 0 ? 1 : 0;
     }
@@ -330,7 +325,7 @@ public final class CompanionDebugCommands {
         ServerPlayerEntity player = companion.get();
         Direction facing = player.getHorizontalFacing();
         BlockPos support = player.getBlockPos().down().offset(facing);
-        BlockHitResult hitResult = new BlockHitResult(support.toCenterPos(), Direction.UP, support, false);
+        BlockHitResult hitResult = new BlockHitResult(support.toCenterPos().add(0.0D, 0.5D, 0.0D), Direction.UP, support, false);
         ItemStack stack = player.getMainHandStack();
         int before = stack.getCount();
         ActionResult result = player.interactionManager.interactBlock(player, player.getEntityWorld(), stack, Hand.MAIN_HAND, hitResult);
@@ -353,7 +348,7 @@ public final class CompanionDebugCommands {
         Direction facing = player.getHorizontalFacing();
         BlockPos support = player.getBlockPos().down().offset(facing);
         BlockPos target = support.up();
-        BlockHitResult hitResult = new BlockHitResult(support.toCenterPos(), Direction.UP, support, false);
+        BlockHitResult hitResult = new BlockHitResult(support.toCenterPos().add(0.0D, 0.5D, 0.0D), Direction.UP, support, false);
         ItemStack stack = player.getMainHandStack();
         int before = stack.getCount();
         String supportBefore = player.getEntityWorld().getBlockState(support).getBlock().getName().getString();
@@ -411,11 +406,8 @@ public final class CompanionDebugCommands {
         }
 
         ServerPlayerEntity player = companion.get();
-        ServerWorld world = (ServerWorld) player.getEntityWorld();
-        Vec3d pos = new Vec3d(player.getX(), player.getY(), player.getZ());
-        player.teleport(world, pos.x, pos.y + 6.0D, pos.z, Set.of(), player.getYaw(), player.getPitch(), true);
-        boolean started = CompanionBehaviorTestTasks.observeGravity(player, source);
-        source.sendFeedback(() -> Text.literal("Gravity test started: teleported AICompanion 6 blocks upward."), true);
+        boolean started = CompanionBehaviorTestTasks.driveFall(player, source);
+        source.sendFeedback(() -> Text.literal("Gravity test started: server-driven fall from current position."), true);
         return started ? 1 : 0;
     }
 
@@ -428,7 +420,7 @@ public final class CompanionDebugCommands {
 
         ServerPlayerEntity player = companion.get();
         Direction facing = player.getHorizontalFacing();
-        Vec3d velocity = new Vec3d(-facing.getOffsetX() * 0.7D, 0.35D, -facing.getOffsetZ() * 0.7D);
+        Vec3d velocity = new Vec3d(-facing.getOffsetX() * 0.28D, 0.0D, -facing.getOffsetZ() * 0.28D);
         boolean started = CompanionBehaviorTestTasks.applyVelocity(player, source, velocity);
         sendVelocityToNearbyPlayers(player);
         source.sendFeedback(() -> Text.literal(String.format("Velocity test started: velocity=%.2f %.2f %.2f",
@@ -470,6 +462,23 @@ public final class CompanionDebugCommands {
 
     private static void sendVelocityToNearbyPlayers(ServerPlayerEntity player) {
         sendToNearbyPlayers(player, new EntityVelocityUpdateS2CPacket(player));
+    }
+
+    private static void setMainHandAndSync(ServerPlayerEntity player, ItemStack stack) {
+        player.setStackInHand(Hand.MAIN_HAND, stack);
+        syncEquipmentToNearbyPlayers(player);
+    }
+
+    private static int syncEquipmentToNearbyPlayers(ServerPlayerEntity player) {
+        List<Pair<EquipmentSlot, ItemStack>> equipment = List.of(
+                Pair.of(EquipmentSlot.MAINHAND, player.getEquippedStack(EquipmentSlot.MAINHAND).copy()),
+                Pair.of(EquipmentSlot.OFFHAND, player.getEquippedStack(EquipmentSlot.OFFHAND).copy()),
+                Pair.of(EquipmentSlot.HEAD, player.getEquippedStack(EquipmentSlot.HEAD).copy()),
+                Pair.of(EquipmentSlot.CHEST, player.getEquippedStack(EquipmentSlot.CHEST).copy()),
+                Pair.of(EquipmentSlot.LEGS, player.getEquippedStack(EquipmentSlot.LEGS).copy()),
+                Pair.of(EquipmentSlot.FEET, player.getEquippedStack(EquipmentSlot.FEET).copy()));
+        EntityEquipmentUpdateS2CPacket packet = new EntityEquipmentUpdateS2CPacket(player.getId(), equipment);
+        return sendToNearbyPlayers(player, packet);
     }
 
     private static int sendToNearbyPlayers(ServerPlayerEntity player, net.minecraft.network.packet.Packet<?> packet) {

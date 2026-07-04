@@ -70,6 +70,81 @@ Interpretation:
 
 The server-side player state is increasingly credible, but client-visible synchronization and server-driven movement are now the main risk areas.
 
+## Latest Test Notes - Sync And Movement Batch
+
+Date: 2026-07-04
+
+Commands tested:
+
+```text
+/aicompanion sync_equipment
+/aicompanion use_item_visual
+/aicompanion give_blocks
+/aicompanion place_front_debug
+/aicompanion gravity_test
+/aicompanion velocity_test
+/aicompanion hurt_visual
+```
+
+Observed results:
+
+- `sync_equipment` works: armor and weapon became visible after explicitly sending equipment synchronization.
+- `use_item_visual` is no longer instant and shows a duration-based use action.
+- Item switching was still wrong during the test: food/block commands reported main-hand changes, but the rendered hand still showed the axe.
+- Because the visible and effective main-hand state was stale, eating appeared as the companion swinging the axe instead of visibly eating food.
+- Block placement still did not place a block.
+- `gravity_test` teleported the companion upward, but natural falling did not occur.
+- `velocity_test` produced no visible movement.
+- `hurt_visual` still did not produce convincing knockback movement.
+- Spawning the companion in midair still leaves it floating.
+
+Interpretation:
+
+Explicit equipment synchronization is required for client-visible state. More importantly, fake players do not receive real client movement packets, so natural player movement, gravity, and knockback cannot be assumed. The future Minecraft Adapter must own server-driven movement and velocity application.
+
+Implementation response:
+
+- Main-hand debug commands now use `setStackInHand` and immediately synchronize equipment to nearby clients.
+- `gravity_test` now starts a server-driven fall after teleporting upward.
+- `velocity_test` and `hurt_visual` now use server-driven movement instead of only setting velocity.
+- `place_front_debug` now reports support block, target block, result, and stack count after attempting vanilla `interactBlock`.
+
+## Latest Test Notes - Confirmed Behavior Batch
+
+Date: 2026-07-04
+
+Commands and manual actions tested:
+
+```text
+/aicompanion equip_armor
+/aicompanion equip_tool
+/aicompanion give_food
+/aicompanion use_item_visual
+/aicompanion give_blocks
+/aicompanion place_front_debug
+/aicompanion gravity_test
+/aicompanion velocity_test
+/aicompanion hurt_visual
+manual player attack
+```
+
+Confirmed results:
+
+- Armor and weapon rendering now work after explicit equipment synchronization.
+- Food can be placed in the companion's main hand and renders correctly.
+- Duration-based food use now shows the expected eating behavior.
+- Using `use_item_visual` with an axe produces no eating-style action, which is expected because an axe is not a duration-use food item.
+- Blocks can be placed in the companion's main hand and render correctly.
+- Block placement now works through vanilla-style interaction.
+- Server-driven `gravity_test` can make the companion fall and land correctly.
+- `velocity_test` can produce a small horizontal movement.
+- `hurt_visual` can produce visible damage feedback plus a small backward hop.
+- Manual player attacks now produce visible damage feedback plus a small backward hop through an attack event hook.
+
+Remaining architecture conclusion:
+
+Spawning the fake player in midair still does not make it fall naturally. This is expected for the current architecture because the fake `ServerPlayerEntity` has no real client sending movement packets. Future movement, gravity, and knockback must be owned by the Minecraft Adapter as server-driven behavior.
+
 ## Already Verified
 
 ### Lifecycle
@@ -216,7 +291,7 @@ Status: Attempted, not yet passed.
 
 Latest note:
 
-`/aicompanion place_front` did not appear to place a block during manual testing. Revisit this after adding better debug output for target position, support block, hand stack, `ActionResult`, and final world state.
+Passed after main-hand synchronization fix. `/aicompanion place_front_debug` can place blocks through vanilla-style interaction.
 
 ### 2. Item Use
 
@@ -247,7 +322,7 @@ Status: Partially passed.
 
 Latest note:
 
-`/aicompanion eat` can mechanically apply food effects and consume one apple, but it is instant. A future test should implement tick-based item use with visible use animation and vanilla duration.
+Passed for food. `/aicompanion use_item_visual` now supports duration-based eating behavior when the companion is holding food. Non-duration items such as an axe do not show food-use behavior, which is expected.
 
 ### 3. Equipment
 
@@ -277,7 +352,7 @@ Status: Partially passed.
 
 Latest note:
 
-Server equipment state works and can trigger vanilla advancement. Client rendering did not visibly show equipped armor/tool in manual testing. Next step is explicit equipment synchronization or triggering tracker updates.
+Passed after explicit synchronization. Armor and held weapons render correctly when server-side equipment changes are followed by equipment update packets.
 
 ### 4. Pickup Items
 
@@ -429,7 +504,7 @@ Status: High priority.
 
 Latest note:
 
-Manual testing found that spawning the companion in the air can leave it floating. Gravity and movement tick behavior must be tested before relying on this entity for autonomous exploration.
+Manual testing found that spawning the companion in the air leaves it floating. This confirms fake players do not naturally run normal client-driven player movement. Server-driven `gravity_test` can make it fall and land, so movement and gravity must be driven by the Minecraft Adapter.
 
 ### 10. Hurt Visuals And Knockback
 
@@ -455,7 +530,7 @@ Status: Partially passed.
 
 Latest note:
 
-Visible hurt feedback exists, but knockback is not yet player-like. This likely needs velocity synchronization or a server-driven movement update.
+Passed with server-driven knockback hop. `/aicompanion hurt_visual` and manual player attacks now produce visible damage feedback plus a small backward hop.
 
 ### 11. Death And Respawn
 
