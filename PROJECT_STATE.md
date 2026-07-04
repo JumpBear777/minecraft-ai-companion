@@ -111,6 +111,38 @@ Skills:
 - Minecraft never contains AI logic.
 - LLM never directly controls the NPC.
 
+## 6.1 Vanilla And Compatibility Principles
+
+These principles are mandatory for all future implementation work.
+
+1. Vanilla first.
+
+   Every Minecraft-facing behavior should prefer vanilla Minecraft systems, APIs, and call paths before custom logic.
+
+2. Compatibility first.
+
+   The companion is expected to run in modded Minecraft environments. Implementation choices should maximize compatibility with vanilla mechanics and other mods.
+
+3. Source before custom.
+
+   Before implementing a new player behavior, inspect the Minecraft Yarn source and available source index to understand how vanilla implements the same behavior.
+
+4. Preserve original behavior.
+
+   Movement, physics, item use, block interaction, damage, inventory, sleeping, riding, chunk loading, and container behavior should stay as close as possible to real player behavior.
+
+5. Patch narrowly.
+
+   Mixins or internal hooks are allowed only when necessary. They must be scoped as narrowly as possible, preferably to `AICompanion` only, and documented with the vanilla reason they exist.
+
+6. Custom logic is a fallback.
+
+   Custom physics, animation, interaction, and state synchronization should be treated as debug tools or fallback adapters, not the default architecture.
+
+7. Document every architectural exception.
+
+   If a feature cannot use the vanilla path, document why, what was tested, what risk remains, and what future Minecraft version changes may affect it.
+
 ## 7. Current Sprint
 
 Sprint 1 goal: technical feasibility study for the in-game companion representation.
