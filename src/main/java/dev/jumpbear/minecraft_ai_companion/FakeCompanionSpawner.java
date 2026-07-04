@@ -1,6 +1,7 @@
 package dev.jumpbear.minecraft_ai_companion;
 
 import com.mojang.authlib.GameProfile;
+import net.minecraft.entity.Entity;
 import net.minecraft.network.ClientConnection;
 import net.minecraft.network.NetworkSide;
 import net.minecraft.network.DisconnectionInfo;
@@ -59,6 +60,10 @@ public final class FakeCompanionSpawner {
 
     public static boolean isCompanion(ServerPlayerEntity player) {
         return COMPANION_UUID.equals(player.getUuid());
+    }
+
+    public static boolean isCompanionEntity(Entity entity) {
+        return entity instanceof ServerPlayerEntity player && isCompanion(player);
     }
 
     public static void teleportNear(ServerPlayerEntity companion, ServerCommandSource source) {

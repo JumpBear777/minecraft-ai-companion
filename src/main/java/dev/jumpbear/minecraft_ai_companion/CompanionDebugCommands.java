@@ -3,11 +3,11 @@ package dev.jumpbear.minecraft_ai_companion;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.datafixers.util.Pair;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.player.HungerManager;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.network.packet.s2c.play.EntityEquipmentUpdateS2CPacket;
-import net.minecraft.network.packet.s2c.play.EntityVelocityUpdateS2CPacket;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.server.command.CommandManager;
@@ -24,7 +24,6 @@ import net.minecraft.util.math.Vec3d;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 
 public final class CompanionDebugCommands {
     private CompanionDebugCommands() {
@@ -209,13 +208,11 @@ public final class CompanionDebugCommands {
 
         ServerPlayerEntity player = companion.get();
         float before = player.getHealth();
-        boolean damaged = player.damage(player.getEntityWorld(), player.getEntityWorld().getDamageSources().generic(), 1.0F);
-        player.getEntityWorld().sendEntityStatus(player, (byte) 2);
-        player.getEntityWorld().sendEntityDamage(player, player.getEntityWorld().getDamageSources().generic());
-        Direction facing = player.getHorizontalFacing();
-        Vec3d knockback = new Vec3d(-facing.getOffsetX() * 0.25D, 0.12D, -facing.getOffsetZ() * 0.25D);
-        CompanionBehaviorTestTasks.applyKnockbackHop(player, source, knockback);
-        sendVelocityToNearbyPlayers(player);
+        Entity attacker = source.getEntity();
+        boolean damaged = attacker instanceof ServerPlayerEntity serverPlayer
+                ? player.damage(player.getEntityWorld(), player.getEntityWorld().getDamageSources().playerAttack(serverPlayer), 1.0F)
+                : player.damage(player.getEntityWorld(), player.getEntityWorld().getDamageSources().generic(), 1.0F);
+        CompanionBehaviorTestTasks.observeVelocity(player, source);
         float after = player.getHealth();
         source.sendFeedback(() -> Text.literal(String.format("Hurt visual: damaged=%s health %.1f -> %.1f", damaged, before, after)), true);
         return damaged ? 1 : 0;
@@ -406,8 +403,8 @@ public final class CompanionDebugCommands {
         }
 
         ServerPlayerEntity player = companion.get();
-        boolean started = CompanionBehaviorTestTasks.driveFall(player, source);
-        source.sendFeedback(() -> Text.literal("Gravity test started: server-driven fall from current position."), true);
+        boolean started = CompanionBehaviorTestTasks.observeGravity(player, source);
+        source.sendFeedback(() -> Text.literal("Gravity test started: observing vanilla physics from current position."), true);
         return started ? 1 : 0;
     }
 
@@ -421,9 +418,9 @@ public final class CompanionDebugCommands {
         ServerPlayerEntity player = companion.get();
         Direction facing = player.getHorizontalFacing();
         Vec3d velocity = new Vec3d(-facing.getOffsetX() * 0.28D, 0.0D, -facing.getOffsetZ() * 0.28D);
-        boolean started = CompanionBehaviorTestTasks.applyVelocity(player, source, velocity);
-        sendVelocityToNearbyPlayers(player);
-        source.sendFeedback(() -> Text.literal(String.format("Velocity test started: velocity=%.2f %.2f %.2f",
+        player.addVelocity(velocity);
+        boolean started = CompanionBehaviorTestTasks.observeVelocity(player, source);
+        source.sendFeedback(() -> Text.literal(String.format("Velocity test started: vanilla addVelocity=%.2f %.2f %.2f",
                 velocity.x, velocity.y, velocity.z)), true);
         return started ? 1 : 0;
     }
@@ -458,10 +455,6 @@ public final class CompanionDebugCommands {
             return "empty";
         }
         return stack.getCount() + "x " + stack.getName().getString();
-    }
-
-    private static void sendVelocityToNearbyPlayers(ServerPlayerEntity player) {
-        sendToNearbyPlayers(player, new EntityVelocityUpdateS2CPacket(player));
     }
 
     private static void setMainHandAndSync(ServerPlayerEntity player, ItemStack stack) {

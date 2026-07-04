@@ -34,6 +34,7 @@ Verified so far:
 - Its `ServerPlayNetworkHandler` can tick without a real network client.
 - Natural falling now works after preserving the vanilla physics result instead of rolling back to stale network coordinates.
 - Water slowdown during falling now behaves like vanilla.
+- Real manual player attacks can produce visible knockback again through a real attack trigger plus vanilla `takeKnockback` math.
 
 Important interpretation:
 
@@ -164,6 +165,40 @@ Retest result:
 - Direct player attacks now look closer to vanilla damage movement.
 - `/aicompanion hurt` still damages without enough movement feedback.
 - `/aicompanion hurt_visual` moves the companion, but its movement method is still a debug approximation and should not be treated as final architecture.
+
+## Latest Test Notes - Real Trigger Knockback
+
+Date: 2026-07-04
+
+Primary test:
+
+```text
+manual player attack
+```
+
+Important testing rule:
+
+Command-only behavior is not enough for player damage conclusions. For damage and knockback, the primary validation path is a real player attack against `AICompanion`.
+
+Source finding:
+
+- Vanilla `PlayerEntity.attack` calculates attack effects and calls `knockbackTarget`.
+- When the target is a `ServerPlayerEntity`, vanilla sends an `EntityVelocityUpdateS2CPacket` to that target's client and then restores the server-side target velocity.
+- This is correct for a real player client, but `AICompanion` has no real client to keep that velocity, so the restored server velocity can make the companion only flash red without moving.
+
+Implementation response:
+
+- A direct `PlayerEntityMixin` attempt was rejected because the runtime injection target was unstable and caused client startup crashes.
+- The unstable Mixin was removed.
+- Real manual attacks are handled through `AttackEntityCallback`.
+- On the next server tick, the companion receives vanilla `takeKnockback` using the attacker's yaw and vanilla strength.
+- The previous teleport-based knockback hop task was removed.
+
+Retest result:
+
+- Client startup is stable again.
+- Real manual player attacks produce visible knockback again.
+- This is still a narrow adapter for fake-player lifecycle differences, but it is closer to vanilla than teleport-driven movement because it uses `LivingEntity.takeKnockback` instead of custom position animation.
 
 ## Already Verified
 
@@ -552,7 +587,7 @@ Status: Partially passed.
 
 Latest note:
 
-Manual player attacks now look closer to vanilla after the network tick and physics-position fix. `/aicompanion hurt` still mostly behaves as mechanical damage without convincing movement feedback. `/aicompanion hurt_visual` remains a debug-only movement approximation, not the desired final compatibility path.
+Manual player attacks now produce visible knockback through a real attack trigger and vanilla `takeKnockback` math. `/aicompanion hurt` remains mechanical damage and should not be used as the primary knockback test. `/aicompanion hurt_visual` is secondary diagnostic behavior, not the main architecture validation.
 
 ### 11. Death And Respawn
 
@@ -606,27 +641,28 @@ Prefer vanilla player/entity systems first. Custom server-driven movement should
 
 - Fake/local connection may fail in systems that expect a real client packet flow.
 - The companion currently needs a Mixin against `ServerPlayNetworkHandler.tickMovement`, which is version-sensitive.
+- A broader `PlayerEntity` Mixin for knockback was attempted and removed after startup instability; prefer event/API-based adapters unless a Mixin is proven stable and necessary.
 - Container interaction is likely the hardest near-term feature.
 - Active movement still needs investigation because there is no real client sending movement packets.
 - Visual behavior may require explicit swing, block-breaking, rotation, and entity status updates.
 - Equipment may require explicit synchronization to nearby clients.
 - Duration-based item use must be modeled as a ticked action, not a direct `finishUsing` call.
-- Gravity is now confirmed through preserved vanilla physics, but jumping, swimming, steering, sprinting, and knockback still need explicit validation.
+- Gravity is now confirmed through preserved vanilla physics, and real manual attack knockback is now visible. Jumping, swimming, steering, and sprinting still need explicit validation.
 - Chunk loading must be budgeted to avoid severe performance cost.
 - Minecraft version updates may break internal player/network lifecycle APIs.
 
 ## Next Recommended Implementation
 
-Prioritize active movement, hurt/knockback, and client synchronization before adding more high-level skills.
+Prioritize active movement and client synchronization before adding more high-level skills.
 
 Recommended next commands:
 
 ```text
-/aicompanion velocity_test
-/aicompanion hurt
-/aicompanion hurt_visual
+manual player attack
+natural falling from air
+falling into water
 ```
 
 Reason:
 
-The latest tests show that passive vanilla physics can be recovered, but active movement and damage response still need to be pushed closer to the vanilla player path.
+The latest tests show that passive vanilla physics and real attack knockback can be recovered well enough for the prototype. Next validation should keep using real gameplay triggers wherever possible.

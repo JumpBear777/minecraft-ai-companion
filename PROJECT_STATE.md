@@ -180,14 +180,15 @@ Verified so far:
 - With the stale network-position rollback skipped only for `AICompanion`, vanilla player/entity physics can persist.
 - Natural falling now works without the debug `gravity_test` driver.
 - Falling into water now slows down like vanilla behavior, which strongly suggests the original physics path is being preserved.
-- Manual player attacks now produce more vanilla-like damage movement.
+- Real manual player attacks now produce visible damage feedback and player-like knockback movement.
 
 Known current risks:
 
 - Fake players do not receive real client movement packets.
 - Client-driven movement packets still do not exist, so future active movement cannot rely on a real client input loop.
 - `ServerPlayNetworkHandler` normally rolls player position back to the last accepted network position; the companion needs a narrow compatibility patch to preserve server-calculated physics.
-- Active walking, steering, jumping, swimming, and knockback still need deeper validation through vanilla player APIs before any custom movement adapter is accepted.
+- Active walking, steering, jumping, and swimming still need deeper validation through vanilla player APIs before any custom movement adapter is accepted.
+- Player-vs-companion knockback still needs a compatibility note: real attacks use the vanilla attack event, but the fake player needs a server-side `takeKnockback` follow-up because it has no real client to retain player-target velocity.
 - Equipment and main-hand changes require explicit client synchronization for rendering.
 - Duration-based item use must be ticked instead of calling `finishUsing` directly.
 - Block placement needs better `BlockHitResult` and final-world-state debugging.
@@ -196,13 +197,14 @@ Latest implementation response:
 
 - `give_food`, `give_blocks`, and `equip_tool` now use `setStackInHand` plus explicit equipment synchronization.
 - `equip_armor` now synchronizes equipment immediately.
-- `gravity_test` now starts a server-driven fall from the current position.
-- `velocity_test` uses server-driven horizontal movement as a diagnostic command.
-- `hurt_visual` and manual player attacks now use a server-driven backward hop.
+- `gravity_test` now observes vanilla falling from the current position instead of driving fall movement.
+- `velocity_test` now applies vanilla `addVelocity` and observes the result instead of driving teleport-based movement.
+- Manual player attacks now use a real attack trigger plus vanilla `takeKnockback` math on the server tick; command-based hurt visuals are no longer treated as the primary validation path.
 - `place_front_debug` reports support block, target block, action result, stack count, and final world state.
 - The local fake connection is now added to `server.getNetworkIo().getConnections()` so its packet listener is ticked by the normal server network loop.
 - A narrow Mixin redirects `ServerPlayNetworkHandler.tickMovement` for `AICompanion` only, preventing the stale client-position reset from overwriting vanilla physics results.
 - Manual testing confirmed natural falling and water slowdown now behave like vanilla.
+- Manual testing confirmed real player attacks now produce visible knockback again without the previous teleport-based hop task.
 
 Current debug commands to test next:
 

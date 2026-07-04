@@ -1,41 +1,53 @@
 package dev.jumpbear.minecraft_ai_companion;
 
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
 import net.minecraft.entity.Entity;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.ActionResult;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.World;
+import net.minecraft.util.math.MathHelper;
+
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
 
 public final class CompanionCombatHooks {
+    private static final Map<UUID, PendingKnockback> PENDING_KNOCKBACKS = new LinkedHashMap<>();
+
     private CompanionCombatHooks() {
     }
 
     public static void register() {
         AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
-            if (!world.isClient() && player instanceof ServerPlayerEntity attacker && isCompanion(entity)) {
-                applyManualAttackKnockback(attacker, (ServerPlayerEntity) entity, world);
+            if (!world.isClient() && player instanceof ServerPlayerEntity attacker && FakeCompanionSpawner.isCompanionEntity(entity)) {
+                ServerPlayerEntity companion = (ServerPlayerEntity) entity;
+                PENDING_KNOCKBACKS.put(companion.getUuid(), new PendingKnockback(companion, attacker.getYaw()));
             }
 
             return ActionResult.PASS;
         });
+
+        ServerTickEvents.END_SERVER_TICK.register(server -> {
+            Iterator<PendingKnockback> iterator = PENDING_KNOCKBACKS.values().iterator();
+            while (iterator.hasNext()) {
+                PendingKnockback pending = iterator.next();
+                pending.apply();
+                iterator.remove();
+            }
+        });
     }
 
-    private static boolean isCompanion(Entity entity) {
-        return entity instanceof ServerPlayerEntity target
-                && FakeCompanionSpawner.COMPANION_NAME.equals(target.getName().getString());
-    }
+    private record PendingKnockback(ServerPlayerEntity companion, float attackerYaw) {
+        private void apply() {
+            if (companion.isRemoved()) {
+                return;
+            }
 
-    private static void applyManualAttackKnockback(ServerPlayerEntity attacker, ServerPlayerEntity companion, World world) {
-        Vec3d direction = new Vec3d(
-                companion.getX() - attacker.getX(),
-                0.0D,
-                companion.getZ() - attacker.getZ());
-        if (direction.lengthSquared() < 0.0001D) {
-            direction = Vec3d.fromPolar(0.0F, attacker.getYaw());
+            companion.takeKnockback(
+                    0.4D,
+                    MathHelper.sin(attackerYaw * (float) (Math.PI / 180.0)),
+                    -MathHelper.cos(attackerYaw * (float) (Math.PI / 180.0)));
         }
-
-        Vec3d knockback = direction.normalize().multiply(0.22D);
-        CompanionBehaviorTestTasks.applyKnockbackHop(companion, knockback);
     }
 }
