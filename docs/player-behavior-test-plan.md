@@ -30,10 +30,16 @@ Verified so far:
 - Equipping armor can trigger vanilla advancement state.
 - It can consume food mechanically through `finishUsing`.
 - A stronger hurt visual command can trigger visible hurt feedback.
+- Its local fake connection can be registered with the server network loop.
+- Its `ServerPlayNetworkHandler` can tick without a real network client.
+- Natural falling now works after preserving the vanilla physics result instead of rolling back to stale network coordinates.
+- Water slowdown during falling now behaves like vanilla.
 
 Important interpretation:
 
 The companion is not a real network client, but it is increasingly behaving like a server-side autonomous player.
+
+The most important compatibility finding so far is that passive physics should be recovered from vanilla player/entity logic where possible, not reimplemented in the mod.
 
 ## Latest Test Notes
 
@@ -143,7 +149,21 @@ Confirmed results:
 
 Remaining architecture conclusion:
 
-Spawning the fake player in midair still does not make it fall naturally. This is expected for the current architecture because the fake `ServerPlayerEntity` has no real client sending movement packets. Future movement, gravity, and knockback must be owned by the Minecraft Adapter as server-driven behavior.
+Earlier tests showed that spawning the fake player in midair left it floating. Source investigation found the cause: `ServerPlayNetworkHandler.tickMovement` ticks the player, then resets the player's position back to the last accepted client movement position. A fake player has no real client packets, so the vanilla physics result was being overwritten.
+
+Implementation response:
+
+- Register the local fake connection in `server.getNetworkIo().getConnections()` so the normal network loop ticks the companion's packet listener.
+- Keep the connection local and open until explicit removal.
+- Add a narrow Mixin for `AICompanion` only that skips the stale position reset in `ServerPlayNetworkHandler.tickMovement`.
+
+Retest result:
+
+- Spawning/placing the companion in midair now makes it fall naturally without running `/aicompanion gravity_test`.
+- Falling into water now slows down like vanilla, instead of dropping straight down at the old server-driven test speed.
+- Direct player attacks now look closer to vanilla damage movement.
+- `/aicompanion hurt` still damages without enough movement feedback.
+- `/aicompanion hurt_visual` moves the companion, but its movement method is still a debug approximation and should not be treated as final architecture.
 
 ## Already Verified
 
@@ -504,7 +524,9 @@ Status: High priority.
 
 Latest note:
 
-Manual testing found that spawning the companion in the air leaves it floating. This confirms fake players do not naturally run normal client-driven player movement. Server-driven `gravity_test` can make it fall and land, so movement and gravity must be driven by the Minecraft Adapter.
+Initial manual testing found that spawning the companion in the air left it floating. After registering the fake connection with `ServerNetworkIo` and skipping only the stale network-position rollback for `AICompanion`, natural falling now works and water slowdown behaves like vanilla.
+
+This changes the architecture conclusion: passive vanilla physics should be preserved through the normal player tick path whenever possible. The Minecraft Adapter should avoid custom gravity/physics unless a specific behavior cannot be recovered from vanilla systems.
 
 ### 10. Hurt Visuals And Knockback
 
@@ -530,7 +552,7 @@ Status: Partially passed.
 
 Latest note:
 
-Passed with server-driven knockback hop. `/aicompanion hurt_visual` and manual player attacks now produce visible damage feedback plus a small backward hop.
+Manual player attacks now look closer to vanilla after the network tick and physics-position fix. `/aicompanion hurt` still mostly behaves as mechanical damage without convincing movement feedback. `/aicompanion hurt_visual` remains a debug-only movement approximation, not the desired final compatibility path.
 
 ### 11. Death And Respawn
 
@@ -565,6 +587,8 @@ AI Core
   -> Intent / Goal / Skill
   -> Minecraft Adapter
        -> ServerPlayerEntity
+       -> Local fake ClientConnection
+       -> ServerPlayNetworkHandler tick lifecycle
        -> ServerPlayerInteractionManager
        -> Inventory / Equipment / ScreenHandler
        -> World / Chunk / Entity APIs
@@ -574,32 +598,35 @@ The AI Core must not depend on Minecraft classes.
 
 The Minecraft Adapter should own all version-sensitive fake-player behavior.
 
+Compatibility priority:
+
+Prefer vanilla player/entity systems first. Custom server-driven movement should be a fallback, not the default, because the project needs broad compatibility with vanilla mechanics and other mods.
+
 ## Current Risk Register
 
 - Fake/local connection may fail in systems that expect a real client packet flow.
+- The companion currently needs a Mixin against `ServerPlayNetworkHandler.tickMovement`, which is version-sensitive.
 - Container interaction is likely the hardest near-term feature.
-- Movement must be server-driven because there is no real client sending movement packets.
+- Active movement still needs investigation because there is no real client sending movement packets.
 - Visual behavior may require explicit swing, block-breaking, rotation, and entity status updates.
 - Equipment may require explicit synchronization to nearby clients.
 - Duration-based item use must be modeled as a ticked action, not a direct `finishUsing` call.
-- Gravity and velocity need explicit validation because fake players do not receive client movement packets.
+- Gravity is now confirmed through preserved vanilla physics, but jumping, swimming, steering, sprinting, and knockback still need explicit validation.
 - Chunk loading must be budgeted to avoid severe performance cost.
 - Minecraft version updates may break internal player/network lifecycle APIs.
 
 ## Next Recommended Implementation
 
-Prioritize movement/gravity and client synchronization before adding more high-level skills.
+Prioritize active movement, hurt/knockback, and client synchronization before adding more high-level skills.
 
 Recommended next commands:
 
 ```text
-/aicompanion gravity_test
 /aicompanion velocity_test
-/aicompanion sync_equipment
-/aicompanion use_item_visual
-/aicompanion place_front_debug
+/aicompanion hurt
+/aicompanion hurt_visual
 ```
 
 Reason:
 
-The latest tests show that core server-side state is promising, but the next architecture risk is whether fake players can move, fall, synchronize equipment, and perform duration-based actions convincingly without a real client.
+The latest tests show that passive vanilla physics can be recovered, but active movement and damage response still need to be pushed closer to the vanilla player path.

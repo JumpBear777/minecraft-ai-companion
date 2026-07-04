@@ -22,6 +22,7 @@ import java.util.UUID;
 public final class FakeCompanionSpawner {
     public static final String COMPANION_NAME = "AICompanion";
     private static final UUID COMPANION_UUID = UUID.nameUUIDFromBytes(("minecraft-ai-companion:" + COMPANION_NAME).getBytes(StandardCharsets.UTF_8));
+    private static LocalClientConnection companionConnection;
 
     private FakeCompanionSpawner() {
     }
@@ -43,7 +44,9 @@ public final class FakeCompanionSpawner {
         ServerPlayerEntity player = new ServerPlayerEntity(server, world, profile, clientData.syncedOptions());
         player.refreshPositionAndAngles(pos.x + 1.0D, pos.y, pos.z + 1.0D, source.getRotation().y, source.getRotation().x);
 
-        ClientConnection connection = new LocalClientConnection(NetworkSide.SERVERBOUND);
+        LocalClientConnection connection = new LocalClientConnection(NetworkSide.SERVERBOUND);
+        companionConnection = connection;
+        server.getNetworkIo().getConnections().add(connection);
         server.getPlayerManager().onPlayerConnect(connection, player, clientData);
         player.changeGameMode(GameMode.SURVIVAL);
         player.teleport(world, pos.x + 1.0D, pos.y, pos.z + 1.0D, Set.<PositionFlag>of(), source.getRotation().y, source.getRotation().x, true);
@@ -52,6 +55,10 @@ public final class FakeCompanionSpawner {
 
     public static Optional<ServerPlayerEntity> find(MinecraftServer server) {
         return Optional.ofNullable(server.getPlayerManager().getPlayer(COMPANION_UUID));
+    }
+
+    public static boolean isCompanion(ServerPlayerEntity player) {
+        return COMPANION_UUID.equals(player.getUuid());
     }
 
     public static void teleportNear(ServerPlayerEntity companion, ServerCommandSource source) {
@@ -66,8 +73,12 @@ public final class FakeCompanionSpawner {
         }
 
         ServerPlayerEntity player = companion.get();
-        player.networkHandler.onDisconnected(new DisconnectionInfo(Text.literal("AI companion prototype removed")));
-        server.getPlayerManager().remove(player);
+        DisconnectionInfo disconnectionInfo = new DisconnectionInfo(Text.literal("AI companion prototype removed"));
+        if (companionConnection != null) {
+            companionConnection.disconnect(disconnectionInfo);
+            companionConnection = null;
+        }
+        player.networkHandler.onDisconnected(disconnectionInfo);
         return true;
     }
 }

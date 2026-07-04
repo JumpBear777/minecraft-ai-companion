@@ -79,12 +79,17 @@ public final class LocalClientConnection extends ClientConnection {
 
     @Override
     public boolean isOpen() {
-        return true;
+        return disconnectionInfo == null;
     }
 
     @Override
     public boolean isChannelAbsent() {
         return false;
+    }
+
+    @Override
+    public boolean isLocal() {
+        return true;
     }
 
     @Override
