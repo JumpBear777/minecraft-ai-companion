@@ -1,52 +1,133 @@
-# Player Behavior Test Plan
+# 玩家行为测试计划
 
-Last updated: 2026-07-04
+最后更新：2026-07-04
 
-## Purpose
+## 目的
 
-This document tracks whether the AI Companion prototype can behave like a real Minecraft player at the game-mechanics level.
+这份文档用于跟踪 AI Companion 原型在游戏机制层面是否能像真实 Minecraft 玩家一样工作。
 
-The current architecture uses a server-side `ServerPlayerEntity` with a fake/local `ClientConnection`. The goal of this test plan is to reduce risk before building AI, planning, memory, or autonomous skills.
+当前架构使用服务端 `ServerPlayerEntity` 加本地 fake `ClientConnection`。本测试计划的目标是在实现 AI、规划、记忆、自主技能之前，尽量提前降低架构风险。
 
-## Current Result Summary
+## 当前结论摘要
 
-The current approach remains viable.
+当前方案仍然可行。
 
-Verified so far:
+已经验证：
 
-- A companion can join the world as `AICompanion`.
-- The companion is a `ServerPlayerEntity`.
-- It has health, hunger, XP fields, inventory, main hand, and offhand.
-- It can receive items into player inventory.
-- It can be moved/teleported.
-- It can be removed from the player lifecycle.
-- It can be damaged by normal player attacks.
-- It can be damaged through the server damage system.
-- It can use `ServerPlayerInteractionManager.tryBreakBlock`.
-- It can show client-visible hand swing animation.
-- It can show client-visible block breaking cracks.
-- It can perform a delayed visual mining flow and then break a block.
-- It can equip armor and tools on the server side.
-- Equipping armor can trigger vanilla advancement state.
-- It can consume food mechanically through `finishUsing`.
-- A stronger hurt visual command can trigger visible hurt feedback.
-- Its local fake connection can be registered with the server network loop.
-- Its `ServerPlayNetworkHandler` can tick without a real network client.
-- Natural falling now works after preserving the vanilla physics result instead of rolling back to stale network coordinates.
-- Water slowdown during falling now behaves like vanilla.
-- Real manual player attacks can produce visible knockback again through a real attack trigger plus vanilla `takeKnockback` math.
+- 伴侣可以以 `AICompanion` 身份加入世界。
+- 伴侣是 `ServerPlayerEntity`。
+- 伴侣拥有生命值、饥饿值、经验字段、背包、主手和副手。
+- 伴侣可以接收物品到玩家背包。
+- 伴侣可以移动或传送。
+- 伴侣可以从玩家生命周期中移除。
+- 伴侣可以被真实玩家攻击伤害。
+- 伴侣可以通过服务端伤害系统受伤。
+- 伴侣可以使用 `ServerPlayerInteractionManager.tryBreakBlock`。
+- 伴侣可以显示客户端可见的挥手动画。
+- 伴侣可以显示客户端可见的方块破坏裂纹。
+- 伴侣可以执行带进度表现的视觉挖掘流程，并最终破坏方块。
+- 伴侣可以在服务端装备护甲和工具。
+- 装备铁护甲可以触发原版进度状态。
+- 伴侣可以通过 `finishUsing` 完成食物使用的机械效果。
+- 本地 fake connection 可以注册进服务端网络 tick 循环。
+- `ServerPlayNetworkHandler` 可以在没有真实网络客户端的情况下 tick。
+- 修复 stale network position 回滚后，自然下落可以保持原版物理结果。
+- 落水减速表现符合原版。
+- 真实玩家手动攻击可以通过真实攻击触发，加服务端原版 `takeKnockback` 逻辑，产生可见击退。
+- 真实掉落物拾取正常。
+- 真实经验球吸收正常。
+- 真实僵尸攻击正常。
+- 僵尸着火后攻击伴侣，火焰传播到伴侣的表现正常。
+- 水、仙人掌、火、岩浆、岩浆块等环境交互正常。
+- 死亡后会正常掉落刚刚给予的物品。
 
-Important interpretation:
+重要解释：
 
-The companion is not a real network client, but it is increasingly behaving like a server-side autonomous player.
+伴侣不是真实网络客户端，但它正在越来越像一个服务端自主玩家。
 
-The most important compatibility finding so far is that passive physics should be recovered from vanilla player/entity logic where possible, not reimplemented in the mod.
+目前最重要的兼容性发现是：被动物理应该尽量从原版玩家/实体逻辑中恢复，而不是由 Mod 自己重写一套。
 
-## Latest Test Notes
+## 真实触发批量测试
 
-Date: 2026-07-04
+在继续添加更多原型代码之前，优先跑这一批测试。
 
-Commands tested:
+测试规则：
+
+- 优先使用真实游戏触发，而不是命令模拟结果。
+- 本节中的命令只负责准备难以手动触发的条件。
+- 最终判断应来自可见行为和 `/aicompanion status`，而不是 setup 命令本身。
+
+基础准备：
+
+```text
+/aicompanion spawn
+```
+
+手动测试：
+
+```text
+把物品丢到 AICompanion 身上
+把 AICompanion 推入或放入水中
+把 AICompanion 放到空中，让它自然下落
+作为真实玩家攻击 AICompanion
+如果方便，把 AICompanion 放到仙人掌、火、岩浆块或岩浆附近
+```
+
+辅助场景命令：
+
+```text
+/aicompanion setup_pickup_item
+/aicompanion setup_xp_orb
+/aicompanion setup_zombie_attack
+/aicompanion status
+```
+
+预期观察：
+
+- 掉落物应通过 `PlayerEntity.tick -> ItemEntity.onPlayerCollision` 被拾取。
+- 经验球应通过原版经验球碰撞路径被吸收。
+- 僵尸攻击应使用真实 Mob AI 和真实伤害流程。
+- 水、下落、环境方块伤害应使用正常实体/玩家物理。
+- 任何失败项都应先查 Minecraft 源码，再决定是否添加自定义适配。
+
+## 真实触发批量测试结果
+
+日期：2026-07-04
+
+测试方式：
+
+```text
+/aicompanion setup_pickup_item
+/aicompanion setup_xp_orb
+/aicompanion setup_zombie_attack
+手动丢物品到 AICompanion 身上
+真实玩家手动攻击
+推入或放入水中
+放到仙人掌、火、岩浆、岩浆块附近
+死亡掉落观察
+```
+
+确认结果：
+
+- `setup_pickup_item` 正常。
+- `setup_xp_orb` 正常。
+- `setup_zombie_attack` 正常。
+- 僵尸着火后攻击伴侣时，伴侣同样着火，火焰传播符合原版预期。
+- 直接把物品丢到伴侣身上可以正常拾取。
+- 真实玩家手打伴侣正常。
+- 推入或放入水中正常。
+- 放到仙人掌、火、岩浆、岩浆块附近正常。
+- 死亡后可以正常掉落刚刚给它的物品。
+
+结论：
+
+这一批测试覆盖了大量被动原版机制，包括物品拾取、经验吸收、Mob 攻击、火焰传播、环境伤害、水中物理和死亡掉落。当前可以认为同类被动机制整体可信，不需要继续逐项重复测试。后续重点应转向主动行为和高风险交互，例如主动移动、容器、睡觉、骑乘、区块加载和重生生命周期。
+
+## 最新测试记录
+
+日期：2026-07-04
+
+测试过的命令：
 
 ```text
 /aicompanion equip_tool
@@ -57,31 +138,31 @@ Commands tested:
 /aicompanion place_front
 ```
 
-Observed results:
+观察结果：
 
-- Armor/tool server state works: `/aicompanion status` reports main-hand tool and armor slots.
-- Vanilla advancement trigger works: equipping iron armor triggered `[Suit Up]` for `AICompanion`.
-- Food mechanics partially work: eating an apple changed hunger from `12` to `16` and reduced apple count from `4` to `3`.
-- Hurt visuals improved: hurt feedback is visible, but knockback is still not player-like enough.
-- Block placement did not appear to work reliably.
+- 护甲/工具的服务端状态有效，`/aicompanion status` 可以报告主手工具和护甲槽位。
+- 原版进度触发有效，装备铁护甲时 `AICompanion` 触发了 `[整装上阵]`。
+- 食物机制部分有效，吃苹果可以改变饥饿值并减少物品数量。
+- 受伤视觉有改善，可以看到受伤反馈，但击退仍不够像玩家。
+- 方块放置最初不稳定。
 
-New issues discovered:
+当时发现的问题：
 
-- Gravity/movement is not player-like yet. If spawned in the air, the companion can remain floating instead of falling.
-- Hurt knockback is incomplete. The companion shows hurt feedback, but does not perform a normal small backward knockback.
-- Equipment server state does not guarantee client rendering. Armor/tool state exists and advancement fires, but the user did not see armor/tool rendered on the model.
-- Eating is instant because the current command calls `finishUsing` directly. It does not yet perform vanilla-style duration-based item use.
-- Block placement needs deeper debugging around `BlockHitResult`, target face, selected stack, support block, and interaction context.
+- 重力/移动还不像玩家。如果在空中生成，伴侣可能悬浮不下落。
+- 受击击退不完整。伴侣会有受伤反馈，但没有正常的小幅后退。
+- 服务端装备状态不一定保证客户端渲染。护甲/工具状态存在，进度也会触发，但模型上未必立即显示。
+- 直接调用 `finishUsing` 会让吃东西瞬间完成，不是原版持续使用表现。
+- 方块放置需要进一步调试 `BlockHitResult`、目标面、选中物品、支撑方块和交互上下文。
 
-Interpretation:
+解释：
 
-The server-side player state is increasingly credible, but client-visible synchronization and server-driven movement are now the main risk areas.
+服务端玩家状态已经有可信度，但客户端可见同步和服务端驱动移动曾经是主要风险区。
 
-## Latest Test Notes - Sync And Movement Batch
+## 同步与移动批量测试记录
 
-Date: 2026-07-04
+日期：2026-07-04
 
-Commands tested:
+测试过的命令：
 
 ```text
 /aicompanion sync_equipment
@@ -93,34 +174,34 @@ Commands tested:
 /aicompanion hurt_visual
 ```
 
-Observed results:
+观察结果：
 
-- `sync_equipment` works: armor and weapon became visible after explicitly sending equipment synchronization.
-- `use_item_visual` is no longer instant and shows a duration-based use action.
-- Item switching was still wrong during the test: food/block commands reported main-hand changes, but the rendered hand still showed the axe.
-- Because the visible and effective main-hand state was stale, eating appeared as the companion swinging the axe instead of visibly eating food.
-- Block placement still did not place a block.
-- `gravity_test` teleported the companion upward, but natural falling did not occur.
-- `velocity_test` produced no visible movement.
-- `hurt_visual` still did not produce convincing knockback movement.
-- Spawning the companion in midair still leaves it floating.
+- `sync_equipment` 有效，显式发送装备同步后，护甲和武器可见。
+- `use_item_visual` 不再是瞬间完成，可以看到持续使用动作。
+- 早期测试中，物品切换仍有问题：命令报告主手变化，但渲染手上仍显示斧子。
+- 因为可见主手状态滞后，吃东西看起来像在挥斧，而不是吃食物。
+- 方块放置最初仍没有成功。
+- 早期 `gravity_test` 把伴侣传送到上方，但自然下落没有发生。
+- 早期 `velocity_test` 没有可见移动。
+- 早期 `hurt_visual` 没有产生可信的击退移动。
+- 空中生成仍然悬浮。
 
-Interpretation:
+解释：
 
-Explicit equipment synchronization is required for client-visible state. More importantly, fake players do not receive real client movement packets, so natural player movement, gravity, and knockback cannot be assumed. The future Minecraft Adapter must own server-driven movement and velocity application.
+客户端可见状态需要显式装备同步。更重要的是，fake player 没有真实客户端移动包，所以不能假设自然玩家移动、重力、击退都会自动发生。
 
-Implementation response:
+实现响应：
 
-- Main-hand debug commands now use `setStackInHand` and immediately synchronize equipment to nearby clients.
-- `gravity_test` now starts a server-driven fall after teleporting upward.
-- `velocity_test` and `hurt_visual` now use server-driven movement instead of only setting velocity.
-- `place_front_debug` now reports support block, target block, result, and stack count after attempting vanilla `interactBlock`.
+- 主手调试命令改为 `setStackInHand`，并立即向附近客户端同步装备。
+- 早期 `gravity_test` 曾使用服务端驱动下落。
+- 早期 `velocity_test` 和 `hurt_visual` 曾使用服务端驱动移动。
+- `place_front_debug` 报告支撑方块、目标方块、结果和堆叠数量。
 
-## Latest Test Notes - Confirmed Behavior Batch
+## 已确认行为批次
 
-Date: 2026-07-04
+日期：2026-07-04
 
-Commands and manual actions tested:
+测试过的命令和手动行为：
 
 ```text
 /aicompanion equip_armor
@@ -132,79 +213,78 @@ Commands and manual actions tested:
 /aicompanion gravity_test
 /aicompanion velocity_test
 /aicompanion hurt_visual
-manual player attack
+真实玩家手动攻击
 ```
 
-Confirmed results:
+确认结果：
 
-- Armor and weapon rendering now work after explicit equipment synchronization.
-- Food can be placed in the companion's main hand and renders correctly.
-- Duration-based food use now shows the expected eating behavior.
-- Using `use_item_visual` with an axe produces no eating-style action, which is expected because an axe is not a duration-use food item.
-- Blocks can be placed in the companion's main hand and render correctly.
-- Block placement now works through vanilla-style interaction.
-- Server-driven `gravity_test` can make the companion fall and land correctly.
-- `velocity_test` can produce a small horizontal movement.
-- `hurt_visual` can produce visible damage feedback plus a small backward hop.
-- Manual player attacks now produce visible damage feedback plus a small backward hop through an attack event hook.
+- 显式装备同步后，护甲和武器渲染正常。
+- 食物可以放到伴侣主手并正确显示。
+- 持续使用食物可以显示预期的吃东西行为。
+- 对斧子执行 `use_item_visual` 不出现吃东西动作，这是预期行为，因为斧子不是持续食用物品。
+- 方块可以放到伴侣主手并正确显示。
+- 方块放置可以通过原版式交互成功。
+- 早期服务端驱动 `gravity_test` 可以让伴侣下落并落地。
+- 早期 `velocity_test` 可以产生小幅水平移动。
+- 早期 `hurt_visual` 可以产生受伤反馈和小幅后退。
+- 真实玩家攻击可以通过攻击事件 hook 产生受伤反馈和小幅后退。
 
-Remaining architecture conclusion:
+后续架构结论：
 
-Earlier tests showed that spawning the fake player in midair left it floating. Source investigation found the cause: `ServerPlayNetworkHandler.tickMovement` ticks the player, then resets the player's position back to the last accepted client movement position. A fake player has no real client packets, so the vanilla physics result was being overwritten.
+早期测试显示 fake player 在空中会悬浮。源码调查发现原因是：`ServerPlayNetworkHandler.tickMovement` tick 玩家后，会把玩家位置重置回最后一次客户端移动位置。fake player 没有真实客户端移动包，因此原版物理结果被覆盖。
 
-Implementation response:
+实现响应：
 
-- Register the local fake connection in `server.getNetworkIo().getConnections()` so the normal network loop ticks the companion's packet listener.
-- Keep the connection local and open until explicit removal.
-- Add a narrow Mixin for `AICompanion` only that skips the stale position reset in `ServerPlayNetworkHandler.tickMovement`.
+- 将本地 fake connection 注册进 `server.getNetworkIo().getConnections()`，让正常网络循环 tick 伴侣的 packet listener。
+- 保持连接为 local，并在显式移除前保持 open。
+- 添加只针对 `AICompanion` 的窄 Mixin，跳过 `ServerPlayNetworkHandler.tickMovement` 中 stale position reset。
 
-Retest result:
+复测结果：
 
-- Spawning/placing the companion in midair now makes it fall naturally without running `/aicompanion gravity_test`.
-- Falling into water now slows down like vanilla, instead of dropping straight down at the old server-driven test speed.
-- Direct player attacks now look closer to vanilla damage movement.
-- `/aicompanion hurt` still damages without enough movement feedback.
-- `/aicompanion hurt_visual` moves the companion, but its movement method is still a debug approximation and should not be treated as final architecture.
+- 在空中生成或放置伴侣后，不需要运行 `/aicompanion gravity_test`，它也会自然下落。
+- 落入水中会像原版一样减速，而不是旧服务端驱动测试那样直直下坠。
+- 真实玩家攻击更接近原版受击移动。
+- `/aicompanion hurt` 仍主要是机械伤害，不应作为击退主测试。
+- `/aicompanion hurt_visual` 是辅助诊断行为，不应作为最终架构依据。
 
-## Latest Test Notes - Real Trigger Knockback
+## 真实触发击退记录
 
-Date: 2026-07-04
+日期：2026-07-04
 
-Primary test:
+主测试：
 
 ```text
-manual player attack
+真实玩家手动攻击
 ```
 
-Important testing rule:
+重要测试规则：
 
-Command-only behavior is not enough for player damage conclusions. For damage and knockback, the primary validation path is a real player attack against `AICompanion`.
+命令行为不足以证明伤害/击退结论。对于伤害和击退，主要验证路径必须是真实玩家攻击 `AICompanion`。
 
-Source finding:
+源码发现：
 
-- Vanilla `PlayerEntity.attack` calculates attack effects and calls `knockbackTarget`.
-- When the target is a `ServerPlayerEntity`, vanilla sends an `EntityVelocityUpdateS2CPacket` to that target's client and then restores the server-side target velocity.
-- This is correct for a real player client, but `AICompanion` has no real client to keep that velocity, so the restored server velocity can make the companion only flash red without moving.
+- 原版 `PlayerEntity.attack` 会计算攻击效果，并调用 `knockbackTarget`。
+- 当目标是 `ServerPlayerEntity` 时，原版会向目标客户端发送 `EntityVelocityUpdateS2CPacket`，然后恢复服务端目标速度。
+- 这对真实玩家客户端是正确的，但 `AICompanion` 没有真实客户端保留这个速度，所以服务端速度恢复会导致伴侣只红闪、不移动。
 
-Implementation response:
+实现响应：
 
-- A direct `PlayerEntityMixin` attempt was rejected because the runtime injection target was unstable and caused client startup crashes.
-- The unstable Mixin was removed.
-- Real manual attacks are handled through `AttackEntityCallback`.
-- On the next server tick, the companion receives vanilla `takeKnockback` using the attacker's yaw and vanilla strength.
-- The previous teleport-based knockback hop task was removed.
+- 曾尝试直接对 `PlayerEntity` 写 Mixin，但运行时注入目标不稳定，会导致客户端启动崩溃，因此撤回。
+- 真实手动攻击现在通过 `AttackEntityCallback` 处理。
+- 在下一次服务端 tick 中，伴侣使用攻击者 yaw 和原版强度执行 `takeKnockback`。
+- 旧的 teleport-based knockback hop task 已删除。
 
-Retest result:
+复测结果：
 
-- Client startup is stable again.
-- Real manual player attacks produce visible knockback again.
-- This is still a narrow adapter for fake-player lifecycle differences, but it is closer to vanilla than teleport-driven movement because it uses `LivingEntity.takeKnockback` instead of custom position animation.
+- 客户端启动恢复稳定。
+- 真实玩家攻击再次产生可见击退。
+- 这仍然是针对 fake-player 生命周期差异的窄适配，但比 teleport 驱动移动更接近原版，因为它使用 `LivingEntity.takeKnockback`，而不是自定义位置动画。
 
-## Already Verified
+## 已验证项目
 
-### Lifecycle
+### 生命周期
 
-Commands:
+命令：
 
 ```text
 /aicompanion spawn
@@ -213,38 +293,38 @@ Commands:
 /aicompanion remove
 ```
 
-Pass criteria:
+通过标准：
 
-- Companion joins the game.
-- Companion appears in the world.
-- Status command can find it.
-- Move command brings it near the user.
-- Remove command makes it leave cleanly.
+- 伴侣加入游戏。
+- 伴侣出现在世界中。
+- 状态命令可以找到它。
+- 移动命令可以把它带到玩家附近。
+- 移除命令可以让它干净离开。
 
-Status: Passed.
+状态：已通过。
 
-### Player State
+### 玩家状态
 
-Command:
+命令：
 
 ```text
 /aicompanion status
 ```
 
-Pass criteria:
+通过标准：
 
-- Reports health.
-- Reports hunger and saturation.
-- Reports XP level and total XP.
-- Reports game mode.
-- Reports inventory occupied slots.
-- Reports selected item and offhand item.
+- 报告生命值。
+- 报告饥饿值和饱和度。
+- 报告经验等级和总经验。
+- 报告游戏模式。
+- 报告背包占用槽位。
+- 报告选中物品和副手物品。
 
-Status: Passed.
+状态：已通过。
 
-### Survival Damage
+### 生存伤害
 
-Commands:
+命令：
 
 ```text
 /aicompanion spawn
@@ -252,140 +332,140 @@ Commands:
 /aicompanion status
 ```
 
-Pass criteria:
+通过标准：
 
-- Companion is forced into `SURVIVAL`.
-- `canTakeDamage=true`.
-- `/aicompanion hurt` reduces health.
-- User can manually attack the companion and reduce health.
+- 伴侣被强制设为 `SURVIVAL`。
+- `canTakeDamage=true`。
+- `/aicompanion hurt` 会减少生命值。
+- 玩家可以手动攻击伴侣并减少生命值。
 
-Status: Passed.
+状态：已通过。
 
-### Inventory Insert
+### 背包插入
 
-Commands:
+命令：
 
 ```text
 /aicompanion give_wood
 /aicompanion status
 ```
 
-Pass criteria:
+通过标准：
 
-- Inventory occupied slot count increases.
-- Selected stack can show oak logs.
+- 背包占用槽位增加。
+- 选中物品可以显示橡木原木。
 
-Status: Passed.
+状态：已通过。
 
-### Instant Block Breaking
+### 瞬间破坏方块
 
-Command:
+命令：
 
 ```text
 /aicompanion break_front
 ```
 
-Pass criteria:
+通过标准：
 
-- Companion attempts to break the block directly in front of it.
-- Command returns `broken=true`.
-- Target block disappears.
-- Block drops behave according to vanilla rules.
+- 伴侣尝试破坏正前方方块。
+- 命令返回 `broken=true`。
+- 目标方块消失。
+- 方块掉落遵循原版规则。
 
-Status: Passed.
+状态：已通过。
 
-Note:
+备注：
 
-This command verifies mechanics, not presentation. It uses `tryBreakBlock` and can break instantly.
+此命令验证机制，不验证表现。它使用 `tryBreakBlock`，可以瞬间破坏。
 
-### Visual Mining
+### 视觉挖掘
 
-Commands:
+命令：
 
 ```text
 /aicompanion swing
 /aicompanion mine_front_visual
 ```
 
-Pass criteria:
+通过标准：
 
-- User can see hand swing animation.
-- User can see block breaking crack progress.
-- Companion breaks the block after a short delay.
+- 可以看到主手挥动动画。
+- 可以看到方块破坏裂纹进度。
+- 伴侣在短暂延迟后破坏方块。
 
-Status: Passed.
+状态：已通过。
 
-## Next Tests
+## 后续测试项
 
-### 1. Block Placement
+### 1. 方块放置
 
-Goal:
+目标：
 
-Verify that the companion can place blocks from its inventory using player-like interaction flow.
+验证伴侣能否通过玩家式交互流程放置背包中的方块。
 
-Candidate commands:
+候选命令：
 
 ```text
 /aicompanion give_blocks
 /aicompanion place_front
 ```
 
-Pass criteria:
+通过标准：
 
-- Companion has placeable blocks in inventory.
-- Companion uses main hand item.
-- A block appears in front of or adjacent to the companion.
-- Inventory stack count decreases.
-- Placement respects vanilla rules where practical.
+- 伴侣拥有可放置方块。
+- 伴侣使用主手物品。
+- 方块出现在伴侣前方或相邻位置。
+- 背包堆叠数量减少。
+- 在可行范围内遵守原版放置规则。
 
-Risk:
+风险：
 
-Block placement may require a correct `BlockHitResult`, hand item, target face, and player interaction context.
+方块放置可能依赖正确的 `BlockHitResult`、手上物品、目标面和玩家交互上下文。
 
-Status: Attempted, not yet passed.
+状态：已通过。
 
-Latest note:
+最新备注：
 
-Passed after main-hand synchronization fix. `/aicompanion place_front_debug` can place blocks through vanilla-style interaction.
+主手同步修复后，`/aicompanion place_front_debug` 可以通过原版式交互放置方块。
 
-### 2. Item Use
+### 2. 物品使用
 
-Goal:
+目标：
 
-Verify that the companion can use items through vanilla item interaction paths.
+验证伴侣能否通过原版物品交互路径使用物品。
 
-Candidate commands:
+候选命令：
 
 ```text
 /aicompanion give_food
-/aicompanion use_item
+/aicompanion use_item_visual
 ```
 
-Pass criteria:
+通过标准：
 
-- Companion can hold a food item.
-- Companion can trigger item use.
-- Hunger/saturation changes if applicable.
-- Stack count changes if applicable.
-- Client can see hand animation if relevant.
+- 伴侣可以持有食物。
+- 伴侣可以触发物品使用。
+- 适用时，饥饿值/饱和度变化。
+- 适用时，堆叠数量变化。
+- 客户端可见相关手部动画。
 
-Risk:
+风险：
 
-Some item usage is duration-based and may require ticked use state, not a one-shot call.
+部分物品使用是持续型，需要 ticked use state，而不是一次性调用。
 
-Status: Partially passed.
+状态：食物已通过。
 
-Latest note:
+最新备注：
 
-Passed for food. `/aicompanion use_item_visual` now supports duration-based eating behavior when the companion is holding food. Non-duration items such as an axe do not show food-use behavior, which is expected.
+`/aicompanion use_item_visual` 在伴侣持有食物时支持持续吃东西表现。斧子等非持续食用物品不会显示吃东西行为，这是预期结果。
 
-### 3. Equipment
+### 3. 装备
 
-Goal:
+目标：
 
-Verify armor and held equipment behavior.
+验证护甲和手持装备行为。
 
-Candidate commands:
+候选命令：
 
 ```text
 /aicompanion equip_armor
@@ -393,57 +473,63 @@ Candidate commands:
 /aicompanion status
 ```
 
-Pass criteria:
+通过标准：
 
-- Armor appears on the model.
-- Main hand tool appears.
-- Equipment affects damage or mining speed where expected.
+- 护甲显示在模型上。
+- 主手工具可见。
+- 装备在预期情况下影响伤害或挖掘速度。
 
-Risk:
+风险：
 
-Server state may update correctly while client rendering needs explicit sync.
+服务端状态可能正确更新，但客户端渲染需要显式同步。
 
-Status: Partially passed.
+状态：已通过。
 
-Latest note:
+最新备注：
 
-Passed after explicit synchronization. Armor and held weapons render correctly when server-side equipment changes are followed by equipment update packets.
+显式同步后，护甲和手持武器可以正确渲染。
 
-### 4. Pickup Items
+### 4. 拾取物品
 
-Goal:
+目标：
 
-Verify whether the companion can pick up item entities like a normal player.
+验证伴侣是否能像普通玩家一样拾取物品实体。
 
-Candidate setup:
+候选设置：
 
-- Drop item near companion.
-- Move companion over item.
+- 手动把物品丢到伴侣身边或身上。
+- 使用 `/aicompanion setup_pickup_item` 生成真实掉落物。
 
-Candidate commands:
+候选命令：
 
 ```text
-/aicompanion move_here
+/aicompanion setup_pickup_item
 /aicompanion status
 ```
 
-Pass criteria:
+通过标准：
 
-- Item entity disappears.
-- Companion inventory receives item.
-- Pickup animation/sound occurs if vanilla triggers it.
+- 物品实体消失。
+- 伴侣背包收到物品。
+- 如果原版触发拾取动画/声音，则客户端可见或可听。
 
-Risk:
+风险：
 
-Pickup may depend on movement, collision, and tick behavior.
+拾取依赖移动、碰撞和 tick 行为。
 
-### 5. Container Interaction
+状态：已通过。
 
-Goal:
+最新备注：
 
-Verify whether the companion can interact with containers such as chests.
+`/aicompanion setup_pickup_item` 和手动丢物品到伴侣身上都已正常通过。拾取路径符合 `PlayerEntity.tick -> ItemEntity.onPlayerCollision` 的原版触发方式。
 
-Candidate commands:
+### 5. 容器交互
+
+目标：
+
+验证伴侣能否与箱子等容器交互。
+
+候选命令：
 
 ```text
 /aicompanion open_front_container
@@ -451,93 +537,93 @@ Candidate commands:
 /aicompanion container_take_first
 ```
 
-Pass criteria:
+通过标准：
 
-- Companion can identify a container in front.
-- Companion can insert an item into the container.
-- Companion can remove an item from the container.
-- Inventory and container contents update correctly.
+- 伴侣可以识别前方容器。
+- 伴侣可以向容器放入物品。
+- 伴侣可以从容器取出物品。
+- 背包和容器内容正确更新。
 
-Risk:
+风险：
 
-High. A real player relies on client screen handling and click packets. The AI companion probably needs server-side inventory manipulation rather than GUI-driven interaction.
+高。真实玩家依赖客户端 screen handler 和点击包。AI Companion 可能需要服务端背包操作，而不是 GUI 驱动交互。
 
-### 6. Sleeping
+### 6. 睡觉
 
-Goal:
+目标：
 
-Verify whether the companion can sleep in a bed.
+验证伴侣能否在床上睡觉。
 
-Candidate commands:
+候选命令：
 
 ```text
 /aicompanion sleep_front_bed
 /aicompanion wake
 ```
 
-Pass criteria:
+通过标准：
 
-- Companion enters sleeping pose.
-- Bed occupancy behaves correctly.
-- Wake command returns it to normal.
+- 伴侣进入睡觉姿势。
+- 床占用状态正确。
+- 唤醒命令恢复正常状态。
 
-Risk:
+风险：
 
-Sleeping may interact with multiplayer sleep percentage and player list state.
+睡觉会和多人睡眠比例、玩家列表状态交互。
 
-### 7. Riding
+### 7. 骑乘
 
-Goal:
+目标：
 
-Verify whether the companion can mount and dismount entities.
+验证伴侣能否骑乘和下马。
 
-Candidate commands:
+候选命令：
 
 ```text
 /aicompanion ride_nearest
 /aicompanion dismount
 ```
 
-Pass criteria:
+通过标准：
 
-- Companion mounts a nearby rideable entity.
-- Client sees riding pose.
-- Dismount works.
+- 伴侣骑上附近可骑乘实体。
+- 客户端可见骑乘姿势。
+- 下马正常。
 
-Risk:
+风险：
 
-Some rideables require ownership, saddles, or interaction-specific state.
+部分可骑乘实体需要所有权、鞍或特定交互状态。
 
-### 8. Chunk Loading
+### 8. 区块加载
 
-Goal:
+目标：
 
-Verify whether the companion participates in natural player chunk tracking.
+验证伴侣是否参与自然玩家区块跟踪。
 
-Candidate commands:
+候选命令：
 
 ```text
 /aicompanion teleport_far
 /aicompanion status
 ```
 
-Pass criteria:
+通过标准：
 
-- Companion can exist far away from the user.
-- Its nearby chunks stay loaded/ticked as a player would require.
-- Server does not crash or unload the companion unexpectedly.
+- 伴侣可以存在于远离玩家的位置。
+- 它附近区块像玩家需要的那样保持加载/tick。
+- 服务端不崩溃，也不会异常卸载伴侣。
 
-Risk:
+风险：
 
-High performance impact. Autonomous exploration can load many chunks.
+性能影响高。自主探索可能加载大量区块。
 
-### 9. Movement And Rotation
+### 9. 移动与旋转
 
-Goal:
+目标：
 
-Verify that the companion can move and look around in a client-visible way.
+验证伴侣是否能以客户端可见的方式移动和看向目标。
 
-Candidate commands:
+候选命令：
 
 ```text
 /aicompanion step_forward
@@ -545,77 +631,83 @@ Candidate commands:
 /aicompanion walk_to_me
 ```
 
-Pass criteria:
+通过标准：
 
-- Companion position updates smoothly enough for gameplay.
-- Rotation/head direction updates visibly.
-- Movement does not desync or rubber-band.
+- 伴侣位置更新足够平滑。
+- 旋转/头部方向可见更新。
+- 移动不出现不同步或橡皮筋。
 
-Risk:
+风险：
 
-A fake player has no client movement packets, so movement must be driven server-side.
+fake player 没有客户端移动包，因此主动移动仍需研究。
 
-Status: High priority.
+状态：高优先级。
 
-Latest note:
+最新备注：
 
-Initial manual testing found that spawning the companion in the air left it floating. After registering the fake connection with `ServerNetworkIo` and skipping only the stale network-position rollback for `AICompanion`, natural falling now works and water slowdown behaves like vanilla.
+最初手动测试发现空中生成会悬浮。将 fake connection 注册进 `ServerNetworkIo`，并只为 `AICompanion` 跳过 stale network-position rollback 后，自然下落和落水减速已经符合原版。
 
-This changes the architecture conclusion: passive vanilla physics should be preserved through the normal player tick path whenever possible. The Minecraft Adapter should avoid custom gravity/physics unless a specific behavior cannot be recovered from vanilla systems.
+这改变了架构结论：被动物理应尽可能通过正常玩家 tick 路径保留。Minecraft Adapter 不应默认自定义重力/物理，除非某个行为明确无法从原版系统恢复。
 
-### 10. Hurt Visuals And Knockback
+### 10. 受伤视觉与击退
 
-Goal:
+目标：
 
-Verify that the companion responds to damage with player-like visual and movement feedback.
+验证伴侣受伤时是否有类似玩家的视觉和移动反馈。
 
-Candidate commands:
+主测试：
+
+```text
+真实玩家手动攻击
+```
+
+辅助命令：
 
 ```text
 /aicompanion hurt
 /aicompanion hurt_visual
 ```
 
-Pass criteria:
+通过标准：
 
-- Companion flashes red or plays hurt status.
-- Companion receives visible knockback.
-- Health decreases.
-- Motion synchronizes to nearby clients.
+- 伴侣红闪或播放受伤状态。
+- 伴侣获得可见击退。
+- 生命值减少。
+- 运动同步到附近客户端。
 
-Status: Partially passed.
+状态：真实手打已通过。
 
-Latest note:
+最新备注：
 
-Manual player attacks now produce visible knockback through a real attack trigger and vanilla `takeKnockback` math. `/aicompanion hurt` remains mechanical damage and should not be used as the primary knockback test. `/aicompanion hurt_visual` is secondary diagnostic behavior, not the main architecture validation.
+真实玩家攻击现在通过真实攻击触发和原版 `takeKnockback` 数学产生可见击退。`/aicompanion hurt` 仍是机械伤害，不应作为主要击退测试。`/aicompanion hurt_visual` 是辅助诊断行为，不是主架构验证。
 
-### 11. Death And Respawn
+### 11. 死亡与重生
 
-Goal:
+目标：
 
-Verify player death lifecycle.
+验证玩家死亡生命周期。
 
-Candidate commands:
+候选命令：
 
 ```text
 /aicompanion kill
 /aicompanion respawn
 ```
 
-Pass criteria:
+通过标准：
 
-- Companion can die.
-- Drops are produced according to rules.
-- Death message/lifecycle does not crash.
-- Respawn is possible or intentionally handled.
+- 伴侣可以死亡。
+- 掉落物按规则产生。
+- 死亡消息/生命周期不崩溃。
+- 可以重生，或有意地处理重生逻辑。
 
-Risk:
+风险：
 
-High. Real player death/respawn expects network lifecycle and client state transitions.
+高。真实玩家死亡/重生依赖网络生命周期和客户端状态切换。
 
-## Known Design Direction
+## 已知设计方向
 
-Recommended architecture remains:
+推荐架构仍然是：
 
 ```text
 AI Core
@@ -629,40 +721,43 @@ AI Core
        -> World / Chunk / Entity APIs
 ```
 
-The AI Core must not depend on Minecraft classes.
+AI Core 不能依赖 Minecraft 类。
 
-The Minecraft Adapter should own all version-sensitive fake-player behavior.
+Minecraft Adapter 应负责所有和版本相关的 fake-player 行为。
 
-Compatibility priority:
+兼容性优先级：
 
-Prefer vanilla player/entity systems first. Custom server-driven movement should be a fallback, not the default, because the project needs broad compatibility with vanilla mechanics and other mods.
+优先使用原版玩家/实体系统。自定义服务端驱动移动应是兜底方案，而不是默认架构，因为项目需要尽可能兼容原版机制和其他 Mod。
 
-## Current Risk Register
+## 当前风险登记
 
-- Fake/local connection may fail in systems that expect a real client packet flow.
-- The companion currently needs a Mixin against `ServerPlayNetworkHandler.tickMovement`, which is version-sensitive.
-- A broader `PlayerEntity` Mixin for knockback was attempted and removed after startup instability; prefer event/API-based adapters unless a Mixin is proven stable and necessary.
-- Container interaction is likely the hardest near-term feature.
-- Active movement still needs investigation because there is no real client sending movement packets.
-- Visual behavior may require explicit swing, block-breaking, rotation, and entity status updates.
-- Equipment may require explicit synchronization to nearby clients.
-- Duration-based item use must be modeled as a ticked action, not a direct `finishUsing` call.
-- Gravity is now confirmed through preserved vanilla physics, and real manual attack knockback is now visible. Jumping, swimming, steering, and sprinting still need explicit validation.
-- Chunk loading must be budgeted to avoid severe performance cost.
-- Minecraft version updates may break internal player/network lifecycle APIs.
+- fake/local connection 可能在依赖真实客户端包流的系统中失败。
+- 当前伴侣仍需要一个针对 `ServerPlayNetworkHandler.tickMovement` 的 Mixin，这对版本敏感。
+- 曾尝试更宽的 `PlayerEntity` 击退 Mixin，但启动不稳定，已撤回；除非证明必要且稳定，否则优先使用事件/API 适配。
+- 容器交互可能是近期最难的功能。
+- 主动移动仍需研究，因为没有真实客户端发送移动包。
+- 视觉行为可能需要显式挥手、破坏进度、旋转和实体状态更新。
+- 装备可能需要显式同步到附近客户端。
+- 持续型物品使用必须建模为 ticked action，而不是直接调用 `finishUsing`。
+- 重力已通过保留原版物理验证，真实手打击退也可见。跳跃、游泳、转向、疾跑仍需验证。
+- 区块加载必须做预算，否则会有严重性能风险。
+- Minecraft 版本更新可能破坏内部玩家/网络生命周期 API。
 
-## Next Recommended Implementation
+## 下一步建议
 
-Prioritize active movement and client synchronization before adding more high-level skills.
+同类被动机制已经通过批量真实触发测试，不必继续逐项重复验证。下一步应转向更有架构风险的主动行为和复杂交互。
 
-Recommended next commands:
+推荐下一轮测试：
 
 ```text
-manual player attack
-natural falling from air
-falling into water
+主动移动与转向
+容器交互
+睡觉
+骑乘
+远距离区块加载
+死亡后重生
 ```
 
-Reason:
+原因：
 
-The latest tests show that passive vanilla physics and real attack knockback can be recovered well enough for the prototype. Next validation should keep using real gameplay triggers wherever possible.
+最新测试表明，被动原版物理、真实攻击击退、拾取、经验、Mob 攻击、环境伤害和死亡掉落已经足够支撑原型继续推进。剩余风险主要集中在需要主动控制或复杂客户端生命周期的系统。

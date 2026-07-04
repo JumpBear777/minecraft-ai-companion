@@ -22,19 +22,23 @@ The project is not building a chatbot NPC, a command bot, or a generic automatio
 
    Before implementing player behavior, inspect the Minecraft Yarn source and the available source index. Understand the vanilla path first.
 
-4. Preserve player-like behavior.
+4. Vanilla behavior chains, not only player classes.
+
+   The goal is player-like behavior, but the implementation research must not stop at `PlayerEntity` or `ClientPlayerEntity`. If the player path depends on a real client or is not suitable for a fake server-side player, also inspect vanilla mob and shared entity paths such as `MobEntity`, `MoveControl`, `JumpControl`, `LivingEntity`, `Entity`, navigation, attributes, and interaction managers. Prefer the mature vanilla chain that best matches the situation.
+
+5. Preserve player-like behavior.
 
    Movement, gravity, water physics, damage, knockback, item use, block interaction, inventory, equipment, sleeping, riding, containers, and chunk loading should behave as close to a real player as possible.
 
-5. Patch narrowly.
+6. Patch narrowly.
 
    Mixins and internal hooks are allowed only when needed. Scope them to `AICompanion` where possible and document the vanilla behavior they preserve or restore.
 
-6. Custom logic is fallback.
+7. Custom logic is fallback.
 
    Avoid reimplementing Minecraft physics, animation, inventory, or interaction rules unless source investigation proves that the vanilla path cannot be reused.
 
-7. Document architectural exceptions.
+8. Document architectural exceptions.
 
    If a behavior cannot follow vanilla, document the reason, the tested alternatives, the remaining risk, and the likely version compatibility impact.
 

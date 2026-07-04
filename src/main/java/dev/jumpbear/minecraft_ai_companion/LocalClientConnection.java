@@ -7,7 +7,10 @@ import net.minecraft.network.NetworkSide;
 import net.minecraft.network.listener.PacketListener;
 import net.minecraft.network.listener.TickablePacketListener;
 import net.minecraft.network.packet.Packet;
+import net.minecraft.network.packet.c2s.play.TeleportConfirmC2SPacket;
+import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
 import net.minecraft.network.state.NetworkState;
+import net.minecraft.server.network.ServerPlayNetworkHandler;
 import net.minecraft.text.Text;
 
 import java.util.function.Consumer;
@@ -22,14 +25,17 @@ public final class LocalClientConnection extends ClientConnection {
 
     @Override
     public void send(Packet<?> packet) {
+        handleClientboundPacket(packet);
     }
 
     @Override
     public void send(Packet<?> packet, ChannelFutureListener listener) {
+        handleClientboundPacket(packet);
     }
 
     @Override
     public void send(Packet<?> packet, ChannelFutureListener listener, boolean flush) {
+        handleClientboundPacket(packet);
     }
 
     @Override
@@ -95,5 +101,12 @@ public final class LocalClientConnection extends ClientConnection {
     @Override
     public DisconnectionInfo getDisconnectionInfo() {
         return disconnectionInfo;
+    }
+
+    private void handleClientboundPacket(Packet<?> packet) {
+        if (packet instanceof PlayerPositionLookS2CPacket positionPacket
+                && packetListener instanceof ServerPlayNetworkHandler handler) {
+            handler.onTeleportConfirm(new TeleportConfirmC2SPacket(positionPacket.teleportId()));
+        }
     }
 }
