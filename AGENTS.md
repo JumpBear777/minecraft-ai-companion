@@ -42,6 +42,18 @@ The project is not building a chatbot NPC, a command bot, or a generic automatio
 
    If a behavior cannot follow vanilla, document the reason, the tested alternatives, the remaining risk, and the likely version compatibility impact.
 
+9. Leave extension seams, not future feature code.
+
+   Do not build mod APIs, plugin systems, or broad abstraction layers before the vanilla companion is excellent. However, avoid designs that would force rewrites later. Ask two questions before adding architecture: if future mod support never happens, is this design still good? If future mod support happens, does this design avoid a rewrite?
+
+10. Optimize for one player and one companion.
+
+   The primary target is one computer, one human player, and one AI companion. Keep performance, UX, and architecture focused on that common case before scaling to many companions or server-wide automation.
+
+11. Keep LLM usage sparse.
+
+   Primitive skills must not call the LLM. Most moment-to-moment behavior should run through deterministic behavior and skill code. LLM calls should be reserved for conversation, major events, long-term planning, or meaningful plan revisions.
+
 ## Current Architecture Direction
 
 The current prototype uses a server-side `ServerPlayerEntity` with a local fake `ClientConnection`.

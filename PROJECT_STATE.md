@@ -111,6 +111,46 @@ Skills:
 - Minecraft never contains AI logic.
 - LLM never directly controls the NPC.
 
+## 6.0 Architecture Discipline
+
+These are current design disciplines, not permanent laws. They should guide early development without forcing premature platform work.
+
+1. Do not build for future features.
+
+   Build so future features do not require rewrites. The project should not implement mod APIs, plugin systems, or broad extension frameworks before the vanilla companion is excellent.
+
+2. Leave seams, not unused systems.
+
+   Future extension points should remain thin and practical. The likely long-term seams are world view, behavior/skill execution, and knowledge. Do not add concrete support for future mods until a real use case exists.
+
+3. Use two design checks.
+
+   Before adding architecture, ask:
+
+   ```text
+   If future mod support never happens, is this design still good?
+   If future mod support happens, does this design avoid a rewrite?
+   ```
+
+4. Prefer one player and one companion.
+
+   The default product target is one computer, one human player, and one AI companion. Optimize the early architecture for this common use case before designing for many companions or server-scale automation.
+
+5. Keep model calls sparse.
+
+   The companion should not call an LLM every tick. Most behavior should be handled by deterministic behavior and skill systems. LLM calls should be reserved for conversation, major events, long-term planning, or meaningful plan revisions.
+
+6. Separate primitive and reasoning skills later.
+
+   This split is a likely future direction, but it should not be overbuilt now.
+
+   ```text
+   Primitive skills: MoveTo, MineBlock, Attack, Equip, Eat, OpenChest
+   Reasoning skills: CollectWood, Explore, BuildShelter, OrganizeInventory
+   ```
+
+   Primitive skills should never call the LLM. Reasoning skills may request higher-level reasoning when the current plan genuinely needs revision.
+
 ## 6.1 Vanilla And Compatibility Principles
 
 These principles are mandatory for all future implementation work.
