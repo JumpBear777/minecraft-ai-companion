@@ -26,10 +26,49 @@ Verified so far:
 - It can show client-visible hand swing animation.
 - It can show client-visible block breaking cracks.
 - It can perform a delayed visual mining flow and then break a block.
+- It can equip armor and tools on the server side.
+- Equipping armor can trigger vanilla advancement state.
+- It can consume food mechanically through `finishUsing`.
+- A stronger hurt visual command can trigger visible hurt feedback.
 
 Important interpretation:
 
 The companion is not a real network client, but it is increasingly behaving like a server-side autonomous player.
+
+## Latest Test Notes
+
+Date: 2026-07-04
+
+Commands tested:
+
+```text
+/aicompanion equip_tool
+/aicompanion equip_armor
+/aicompanion give_food
+/aicompanion eat
+/aicompanion hurt_visual
+/aicompanion place_front
+```
+
+Observed results:
+
+- Armor/tool server state works: `/aicompanion status` reports main-hand tool and armor slots.
+- Vanilla advancement trigger works: equipping iron armor triggered `[Suit Up]` for `AICompanion`.
+- Food mechanics partially work: eating an apple changed hunger from `12` to `16` and reduced apple count from `4` to `3`.
+- Hurt visuals improved: hurt feedback is visible, but knockback is still not player-like enough.
+- Block placement did not appear to work reliably.
+
+New issues discovered:
+
+- Gravity/movement is not player-like yet. If spawned in the air, the companion can remain floating instead of falling.
+- Hurt knockback is incomplete. The companion shows hurt feedback, but does not perform a normal small backward knockback.
+- Equipment server state does not guarantee client rendering. Armor/tool state exists and advancement fires, but the user did not see armor/tool rendered on the model.
+- Eating is instant because the current command calls `finishUsing` directly. It does not yet perform vanilla-style duration-based item use.
+- Block placement needs deeper debugging around `BlockHitResult`, target face, selected stack, support block, and interaction context.
+
+Interpretation:
+
+The server-side player state is increasingly credible, but client-visible synchronization and server-driven movement are now the main risk areas.
 
 ## Already Verified
 
@@ -173,6 +212,12 @@ Risk:
 
 Block placement may require a correct `BlockHitResult`, hand item, target face, and player interaction context.
 
+Status: Attempted, not yet passed.
+
+Latest note:
+
+`/aicompanion place_front` did not appear to place a block during manual testing. Revisit this after adding better debug output for target position, support block, hand stack, `ActionResult`, and final world state.
+
 ### 2. Item Use
 
 Goal:
@@ -198,6 +243,12 @@ Risk:
 
 Some item usage is duration-based and may require ticked use state, not a one-shot call.
 
+Status: Partially passed.
+
+Latest note:
+
+`/aicompanion eat` can mechanically apply food effects and consume one apple, but it is instant. A future test should implement tick-based item use with visible use animation and vanilla duration.
+
 ### 3. Equipment
 
 Goal:
@@ -221,6 +272,12 @@ Pass criteria:
 Risk:
 
 Server state may update correctly while client rendering needs explicit sync.
+
+Status: Partially passed.
+
+Latest note:
+
+Server equipment state works and can trigger vanilla advancement. Client rendering did not visibly show equipped armor/tool in manual testing. Next step is explicit equipment synchronization or triggering tracker updates.
 
 ### 4. Pickup Items
 
@@ -368,7 +425,39 @@ Risk:
 
 A fake player has no client movement packets, so movement must be driven server-side.
 
-### 10. Death And Respawn
+Status: High priority.
+
+Latest note:
+
+Manual testing found that spawning the companion in the air can leave it floating. Gravity and movement tick behavior must be tested before relying on this entity for autonomous exploration.
+
+### 10. Hurt Visuals And Knockback
+
+Goal:
+
+Verify that the companion responds to damage with player-like visual and movement feedback.
+
+Candidate commands:
+
+```text
+/aicompanion hurt
+/aicompanion hurt_visual
+```
+
+Pass criteria:
+
+- Companion flashes red or plays hurt status.
+- Companion receives visible knockback.
+- Health decreases.
+- Motion synchronizes to nearby clients.
+
+Status: Partially passed.
+
+Latest note:
+
+Visible hurt feedback exists, but knockback is not yet player-like. This likely needs velocity synchronization or a server-driven movement update.
+
+### 11. Death And Respawn
 
 Goal:
 
@@ -416,19 +505,26 @@ The Minecraft Adapter should own all version-sensitive fake-player behavior.
 - Container interaction is likely the hardest near-term feature.
 - Movement must be server-driven because there is no real client sending movement packets.
 - Visual behavior may require explicit swing, block-breaking, rotation, and entity status updates.
+- Equipment may require explicit synchronization to nearby clients.
+- Duration-based item use must be modeled as a ticked action, not a direct `finishUsing` call.
+- Gravity and velocity need explicit validation because fake players do not receive client movement packets.
 - Chunk loading must be budgeted to avoid severe performance cost.
 - Minecraft version updates may break internal player/network lifecycle APIs.
 
 ## Next Recommended Implementation
 
-Implement block placement next.
+Prioritize movement/gravity and client synchronization before adding more high-level skills.
 
-Suggested command:
+Recommended next commands:
 
 ```text
-/aicompanion place_front
+/aicompanion gravity_test
+/aicompanion velocity_test
+/aicompanion sync_equipment
+/aicompanion use_item_visual
+/aicompanion place_front_debug
 ```
 
 Reason:
 
-Together, inventory insert, visual mining, and block placement form the mechanical base for future skills such as collecting wood, building simple structures, and interacting with the world as a player-like agent.
+The latest tests show that core server-side state is promising, but the next architecture risk is whether fake players can move, fall, synchronize equipment, and perform duration-based actions convincingly without a real client.
