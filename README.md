@@ -9,17 +9,51 @@ The goal is not to create a chatbot NPC or a simple automation tool. The goal is
 ## Current Status
 
 Version: 0.1  
-Sprint: 1 - Repository Bootstrap
+Sprint: 1 - Technical Feasibility Prototype
 
-Sprint 1 focuses on project structure, documentation, and the initial AI Core skeleton. Gameplay integration is intentionally out of scope for this sprint.
+Sprint 1 currently focuses on reducing architecture risk around one question:
+
+> What should represent the companion inside Minecraft?
+
+The current prototype is intentionally minimal. It only proves that a server-side player-like companion can be spawned without a real client connection. It does not implement AI, memory, planning, pathfinding, or autonomous gameplay.
 
 ## Planned Stack
 
 - Java 21
 - Minecraft Fabric
-- Gradle
+- Gradle / Fabric Loom
 - Ollama for local LLM experiments
 - JSON persistence first, SQLite later
+
+## Current Prototype
+
+The prototype targets:
+
+- Minecraft `1.21.11`
+- Fabric Loader `0.19.3`
+- Fabric API `0.141.4+1.21.11`
+- Fabric Loom `1.17.13`
+- Java `21`
+
+It registers a command:
+
+```text
+/aicompanion spawn
+```
+
+The command creates an `AICompanion` `ServerPlayerEntity` using an internal fake/local `ClientConnection`. This is a technical feasibility test for a player-like companion, not a gameplay feature.
+
+## Development Build
+
+On this development machine, use the D drive JDK and keep Gradle caches on D drive:
+
+```powershell
+$env:JAVA_HOME='D:\WorkHelper\Java\JDK-21'
+$env:GRADLE_USER_HOME='D:\tools\gradle-home'
+.\gradlew.bat build --no-daemon
+```
+
+The first build can be slow because Fabric Loom downloads Minecraft, mappings, Fabric dependencies, and remaps jars. Normal mod users do not run Gradle; they only use the built mod jar.
 
 ## Architecture Direction
 

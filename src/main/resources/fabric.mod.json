@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "minecraft-ai-companion",
+  "version": "${version}",
+  "name": "Minecraft AI Companion",
+  "description": "Technical prototype for a player-like Minecraft AI companion.",
+  "authors": [
+    "JumpBear777"
+  ],
+  "contact": {
+    "sources": "https://github.com/JumpBear777/minecraft-ai-companion"
+  },
+  "license": "MIT",
+  "icon": "assets/minecraft-ai-companion/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "dev.jumpbear.minecraft_ai_companion.MinecraftAiCompanionMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
