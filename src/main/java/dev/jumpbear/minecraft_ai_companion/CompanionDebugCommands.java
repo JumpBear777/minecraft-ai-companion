@@ -9,7 +9,9 @@ import net.minecraft.item.Items;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.text.Text;
+import net.minecraft.util.Hand;
 
 import java.util.Optional;
 
@@ -29,6 +31,12 @@ public final class CompanionDebugCommands {
                         .executes(CompanionDebugCommands::giveWood))
                 .then(CommandManager.literal("hurt")
                         .executes(CompanionDebugCommands::hurt))
+                .then(CommandManager.literal("break_front")
+                        .executes(CompanionDebugCommands::breakFront))
+                .then(CommandManager.literal("swing")
+                        .executes(CompanionDebugCommands::swing))
+                .then(CommandManager.literal("mine_front_visual")
+                        .executes(CompanionDebugCommands::mineFrontVisual))
                 .then(CommandManager.literal("remove")
                         .executes(CompanionDebugCommands::remove)));
     }
@@ -115,6 +123,52 @@ public final class CompanionDebugCommands {
         float after = player.getHealth();
         source.sendFeedback(() -> Text.literal(String.format("Hurt AICompanion: damaged=%s health %.1f -> %.1f", damaged, before, after)), true);
         return damaged ? 1 : 0;
+    }
+
+    private static int breakFront(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        Optional<ServerPlayerEntity> companion = requireCompanion(source);
+        if (companion.isEmpty()) {
+            return 0;
+        }
+
+        ServerPlayerEntity player = companion.get();
+        BlockPos target = player.getBlockPos().offset(player.getHorizontalFacing());
+        String blockName = player.getEntityWorld().getBlockState(target).getBlock().getName().getString();
+        boolean broken = player.interactionManager.tryBreakBlock(target);
+        source.sendFeedback(() -> Text.literal("Break front: target=" + target.toShortString()
+                + " block=" + blockName
+                + " broken=" + broken), true);
+        return broken ? 1 : 0;
+    }
+
+    private static int swing(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        Optional<ServerPlayerEntity> companion = requireCompanion(source);
+        if (companion.isEmpty()) {
+            return 0;
+        }
+
+        companion.get().swingHand(Hand.MAIN_HAND);
+        source.sendFeedback(() -> Text.literal("AICompanion swung main hand."), true);
+        return 1;
+    }
+
+    private static int mineFrontVisual(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        Optional<ServerPlayerEntity> companion = requireCompanion(source);
+        if (companion.isEmpty()) {
+            return 0;
+        }
+
+        ServerPlayerEntity player = companion.get();
+        BlockPos target = player.getBlockPos().offset(player.getHorizontalFacing());
+        String blockName = player.getEntityWorld().getBlockState(target).getBlock().getName().getString();
+        boolean started = CompanionMiningTasks.start(player, target);
+        source.sendFeedback(() -> Text.literal("Mine front visual: target=" + target.toShortString()
+                + " block=" + blockName
+                + " started=" + started), true);
+        return started ? 1 : 0;
     }
 
     private static int remove(CommandContext<ServerCommandSource> context) {
