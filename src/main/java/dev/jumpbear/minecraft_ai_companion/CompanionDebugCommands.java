@@ -3,6 +3,9 @@ package dev.jumpbear.minecraft_ai_companion;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.datafixers.util.Pair;
+import dev.jumpbear.minecraft_ai_companion.task.CollectDroppedItemsTask;
+import dev.jumpbear.minecraft_ai_companion.task.CompanionTask;
+import dev.jumpbear.minecraft_ai_companion.task.CompanionTaskManager;
 import net.minecraft.block.BedBlock;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
@@ -173,6 +176,15 @@ public final class CompanionDebugCommands {
                         .executes(CompanionDebugCommands::gravityTest))
                 .then(CommandManager.literal("velocity_test")
                         .executes(CompanionDebugCommands::velocityTest))
+                .then(CommandManager.literal("task")
+                        .then(CommandManager.literal("collect")
+                                .executes(CompanionDebugCommands::taskCollect))
+                        .then(CommandManager.literal("current")
+                                .executes(CompanionDebugCommands::taskCurrent))
+                        .then(CommandManager.literal("status")
+                                .executes(CompanionDebugCommands::taskStatus))
+                        .then(CommandManager.literal("cancel")
+                                .executes(CompanionDebugCommands::taskCancel)))
                 .then(CommandManager.literal("remove")
                         .executes(CompanionDebugCommands::remove)));
     }
@@ -182,6 +194,63 @@ public final class CompanionDebugCommands {
         ServerPlayerEntity companion = FakeCompanionSpawner.spawnNear(source);
         source.sendFeedback(() -> Text.literal("Spawned or moved companion: " + companion.getName().getString()), true);
         return 1;
+    }
+
+    private static int taskCollect(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        Optional<ServerPlayerEntity> companion = requireCompanion(source);
+        if (companion.isEmpty()) {
+            return 0;
+        }
+
+        ServerPlayerEntity player = companion.get();
+        CompanionTaskManager.assign(player, new CollectDroppedItemsTask(player));
+        source.sendFeedback(() -> Text.literal("Task assigned: CollectDroppedItems"), true);
+        return 1;
+    }
+
+    private static int taskCurrent(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        Optional<ServerPlayerEntity> companion = requireCompanion(source);
+        if (companion.isEmpty()) {
+            return 0;
+        }
+
+        ServerPlayerEntity player = companion.get();
+        Optional<CompanionTask> current = CompanionTaskManager.current(player);
+        source.sendFeedback(() -> Text.literal("Current task: "
+                + current.map(CompanionTask::describe).orElse("<none>")), false);
+        return 1;
+    }
+
+    private static int taskStatus(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        Optional<ServerPlayerEntity> companion = requireCompanion(source);
+        if (companion.isEmpty()) {
+            return 0;
+        }
+
+        ServerPlayerEntity player = companion.get();
+        boolean running = CompanionTaskManager.hasActiveTask(player);
+        String last = CompanionTaskManager.lastStatus(player).map(Enum::name).orElse("<none>");
+        String current = CompanionTaskManager.current(player).map(CompanionTask::describe).orElse("<none>");
+        source.sendFeedback(() -> Text.literal(String.format(
+                "Task status: running=%s current=%s lastResult=%s", running, current, last)), false);
+        return 1;
+    }
+
+    private static int taskCancel(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        Optional<ServerPlayerEntity> companion = requireCompanion(source);
+        if (companion.isEmpty()) {
+            return 0;
+        }
+
+        boolean cancelled = CompanionTaskManager.cancel(companion.get());
+        source.sendFeedback(() -> Text.literal(cancelled
+                ? "Task cancelled; control returned to Life System."
+                : "No active task to cancel."), true);
+        return cancelled ? 1 : 0;
     }
 
     private static int status(CommandContext<ServerCommandSource> context) {

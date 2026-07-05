@@ -82,7 +82,8 @@ public final class CompanionLifeSystem {
     }
 
     private static boolean shouldYieldToActiveTask(ServerPlayerEntity player) {
-        return CompanionMiningTasks.hasTask(player)
+        return dev.jumpbear.minecraft_ai_companion.task.CompanionTaskManager.hasActiveTask(player)
+                || CompanionMiningTasks.hasTask(player)
                 || CompanionBehaviorTestTasks.hasTask(player);
     }
 

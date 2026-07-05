@@ -66,9 +66,34 @@ The companion's fake connection is registered with the normal server network loo
 
 This is intentional: the project should recover vanilla behavior wherever possible instead of building a separate NPC simulation.
 
+## Task System (Sprint 3)
+
+The companion now has a lightweight Task System in the `task` subpackage. It is the foundation for
+every future capability and must be respected:
+
+- `CompanionTask` is the unit of autonomous work (`start`/`tick` -> `TaskStatus`/`stop`/`describe`),
+  shaped after vanilla `Goal`. A task owns its own execution until it returns a terminal status.
+- `CompanionTaskManager` owns one current task per companion and is the only seam a future planner
+  uses: planners `assign` tasks and never inspect task internals.
+- `CompanionNavigator` is the shared, already-validated movement adapter (vanilla villager
+  pathfinding proxy + `applyServerTravelForward` follow). Tasks must reuse it for "walk to X"
+  instead of writing their own movement.
+- Division of responsibility: **Tasks encapsulate execution. The Life System encapsulates presence.
+  A future planner only assigns tasks. LLM never directly controls movement, mining, or combat.**
+
+Rules for new tasks:
+
+- Compose existing vanilla adapters (`CompanionNavigator`, mining/interaction paths); do not scatter
+  new movement/physics logic inside a task.
+- Do not teleport or use scripted shortcuts; prefer vanilla movement and let vanilla systems (pickup
+  on collision, block breaking, damage) do the work.
+- Always release control in `stop` so the Life System resumes a clean body.
+- Before adding a task, confirm the design still fits `FollowPlayer`, `ChopTree`, `AttackTarget`,
+  `BuildStructure`, `ExploreArea`, and future modded skills. If it does not, redesign first.
+
 ## Work Rules
 
-- Do not implement AI, memory, planner, or LLM behavior during Sprint 2 unless explicitly requested.
+- Do not implement AI, memory, planner, or LLM behavior unless explicitly requested. Sprint 3 is scoped to the Task System foundation; the planner that assigns tasks is a future sprint.
 - Keep changes focused on feasibility, compatibility, and player-like behavior.
 - Before changing Minecraft-facing behavior, inspect relevant Yarn source.
 - Reuse already validated project paths before introducing a new experimental path. If a behavior was previously proven stable, extend or compose that path first.

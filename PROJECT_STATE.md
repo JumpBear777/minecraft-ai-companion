@@ -1,8 +1,8 @@
 # PROJECT_STATE.md
 
 Project: Minecraft AI Companion  
-Version: 0.1 (Sprint 1)  
-Last Updated: 2026-07-04
+Version: 0.1 (Sprint 3)  
+Last Updated: 2026-07-05
 
 ## 1. Project Vision
 
@@ -372,6 +372,121 @@ sprinting semantics / climbing / obstacle navigation
 container interaction
 far chunk loading
 death and respawn lifecycle
+```
+
+## 7.1 Sprint 3 - Task System Foundation
+
+Sprint 3 goal: introduce the first reusable Task System.
+
+Still not implementing AI, LLM, or planning. The objective is the smallest architecture that lets
+the companion run an entire objective continuously (e.g. `CollectDroppedItemsTask`) instead of
+requiring a sequence of debug commands, then hand control back to the Life System.
+
+### Architecture chosen
+
+Three small pieces in a new `task` subpackage:
+
+1. `CompanionTask` (interface) + `TaskStatus` (enum: RUNNING/SUCCESS/FAILURE/CANCELLED).
+
+   The interface is `start` / `tick` -> `TaskStatus` / `stop` / `describe`. It is deliberately
+   shaped after vanilla `net.minecraft.entity.ai.goal.Goal`
+   (`canStart`/`start`/`tick`/`stop`), so the lifecycle is familiar and planner-friendly, but it
+   does not drag in the goal-selector machinery, which assumes a `MobEntity`/`PathAwareEntity`
+   body rather than a `ServerPlayerEntity`.
+
+2. `CompanionTaskManager`.
+
+   Owns exactly one current task per companion. `assign(task)` cancels any previous task, calls
+   `start`, then ticks the task every `END_SERVER_TICK`. When `tick` returns a terminal status the
+   manager calls `stop` and clears the task, which lets the Life System resume on the next tick.
+   This is the seam a future planner will use: it only calls `assign`; it never inspects task
+   internals.
+
+3. `CompanionNavigator`.
+
+   A reusable movement adapter. It is a straight extraction of the already-validated path-follow
+   logic from `CompanionBehaviorTestTasks.NavigationForwardTask`: borrow vanilla pathfinding through
+   a disposable villager proxy (`getNavigation().findPathTo`), then follow the path with
+   `CompanionInputController.applyServerTravelForward`, with the existing stuck/obstacle jump and
+   node-advance heuristics. Every future task (`FollowPlayer`, `ChopTree`, `AttackTarget`,
+   `ExploreArea`) reuses this instead of writing its own movement.
+
+### First prototype task
+
+`CollectDroppedItemsTask`: repeatedly pick the nearest reachable `ItemEntity` within range,
+navigate onto it (vanilla collision performs the actual pickup — no manual pickup call, no
+teleport), skip items that cannot be pathed to or that time out, and finish `SUCCESS` when nothing
+suitable remains. Control then returns to the Life System automatically.
+
+### Alternatives rejected
+
+- Full vanilla `Goal` / `GoalSelector` reuse: rejected because the selector attaches to
+  `MobEntity`/`Brain` bodies and expects mob navigation/controls the companion `ServerPlayerEntity`
+  does not have. We reuse the *shape* of `Goal`, not the machinery.
+- Behavior tree: rejected as over-engineering for one companion and one active objective. A single
+  `tick`-returns-status task covers current needs and composes into a tree later if ever needed.
+- Planner / goal manager now: explicitly out of scope this sprint. The `assign` seam keeps it
+  possible without a rewrite.
+- Refactoring the existing debug tasks (`CompanionMiningTasks`, `CompanionBehaviorTestTasks`) onto
+  the new framework: deferred, to avoid disturbing already-validated paths. They can migrate later.
+
+### Future extension points (documented, not built)
+
+- Task queue and `TaskPriority` (interrupt lower-priority work).
+- Task interruption/resume and re-planning triggers.
+- A planner that maps needs/goals to task assignments through `CompanionTaskManager.assign`.
+- Composite/reasoning tasks that internally sequence primitive movement/mining/attack via the same
+  `CompanionNavigator` and existing vanilla interaction paths.
+- Deliberately deferred (not a gap): the "chase a moving entity -> approach into reach -> hazard
+  gate -> abandon if unreachable" flow currently lives inside `CollectDroppedItemsTask`. It is a
+  clear candidate to lift into `CompanionNavigator` (e.g. `followEntity`/`reachEntity`) so
+  `FollowPlayerTask` and `AttackTargetTask` reuse it. Left in place until a second real consumer
+  exists, per the "implement only ONE task / smallest architecture" constraint — abstracting from a
+  single example risks abstracting wrong. Revisit when the second entity-tracking task is written.
+
+### Verified so far (Sprint 3)
+
+- Project builds with the new `task` subpackage.
+- `/aicompanion task collect` walks the companion to dropped items one by one, picks them up via
+  vanilla collision, finishes cleanly, and resumes the Life System. Manually validated.
+- `/aicompanion task cancel` returns control to the Life System immediately. Manually validated.
+- Hazard avoidance validated: with items dropped across lava, the companion navigates around the
+  lava to reach reachable items and refuses to walk onto lava for unreachable ones.
+
+### Fixes and design refinements during Sprint 3
+
+1. Freeze-on-repeat bug (fixed).
+
+   The first `CollectDroppedItemsTask` treated the vanilla path "arrived" state (which stops ~1
+   block short of the item) as done, but pickup needs bounding-box overlap. Arriving-without-pickup
+   re-acquired the same item every tick with a perpetually reset timer, so the companion froze in
+   place and only `spawn` (which teleports it) broke the loop. Fixed with an explicit per-target
+   phase machine: ACQUIRE -> NAVIGATE -> APPROACH, where APPROACH walks the final short gap to
+   trigger pickup collision, and the per-target tick budget spans both phases and only resets when
+   the target actually changes.
+
+2. Walking into lava during approach (fixed).
+
+   The APPROACH phase walked straight at the item, bypassing the vanilla navigation chain that makes
+   wandering avoid hazards. It therefore walked onto lava. Fixed by reusing the vanilla hazard
+   classification instead of a hard-coded block list: `CompanionNavigator.isHazardAt(BlockPos)`
+   borrows a disposable villager proxy and calls `LandPathNodeMaker.getLandNodeType(...)`, then
+   treats the same `PathNodeType` values the pathfinder treats as impassable/damaging
+   (`LAVA`, `DAMAGE_FIRE`, `DANGER_FIRE`, `DAMAGE_OTHER`, ...) as unsafe. APPROACH checks the item
+   block and the next step each tick and abandons the item rather than step into danger. This keeps
+   the direct-approach fallback aligned with the vanilla safety chain.
+
+   Cost note: hazard checks and pathfinding share one cached villager proxy per `CompanionNavigator`
+   (created lazily, rebuilt on world change, discarded in the task's `stop`), so APPROACH no longer
+   allocates an entity per tick.
+
+### Debug commands added
+
+```text
+/aicompanion task collect   # assign CollectDroppedItemsTask
+/aicompanion task current   # describe the current task
+/aicompanion task status    # running flag + current + last result
+/aicompanion task cancel    # cancel and return control to Life System
 ```
 
 ## 8. First MVP
