@@ -77,7 +77,8 @@ every future capability and must be respected:
   uses: planners `assign` tasks and never inspect task internals.
 - `CompanionNavigator` is the shared, already-validated movement adapter (vanilla villager
   pathfinding proxy + `applyServerTravelForward` follow). Tasks must reuse it for "walk to X"
-  instead of writing their own movement.
+  instead of writing their own movement. For tracking a moving entity (follow/collect/attack), use
+  `tickFollow(entity, repathInterval)`, which handles repath + hazard-gated approach.
 - Division of responsibility: **Tasks encapsulate execution. The Life System encapsulates presence.
   A future planner only assigns tasks. LLM never directly controls movement, mining, or combat.**
 

@@ -437,12 +437,10 @@ suitable remains. Control then returns to the Life System automatically.
 - A planner that maps needs/goals to task assignments through `CompanionTaskManager.assign`.
 - Composite/reasoning tasks that internally sequence primitive movement/mining/attack via the same
   `CompanionNavigator` and existing vanilla interaction paths.
-- Deliberately deferred (not a gap): the "chase a moving entity -> approach into reach -> hazard
-  gate -> abandon if unreachable" flow currently lives inside `CollectDroppedItemsTask`. It is a
-  clear candidate to lift into `CompanionNavigator` (e.g. `followEntity`/`reachEntity`) so
-  `FollowPlayerTask` and `AttackTargetTask` reuse it. Left in place until a second real consumer
-  exists, per the "implement only ONE task / smallest architecture" constraint — abstracting from a
-  single example risks abstracting wrong. Revisit when the second entity-tracking task is written.
+- Done (was deferred): the "chase a moving entity -> approach into reach -> hazard gate -> abandon
+  if unreachable" flow was lifted into `CompanionNavigator.tickFollow(entity, repathInterval)` once
+  a second consumer existed. `CollectDroppedItemsTask` and `FollowPlayerTask` now share it;
+  `AttackTargetTask` is expected to reuse it too (walk into range, then attack). See 7.2.
 
 ### Verified so far (Sprint 3)
 
@@ -484,10 +482,35 @@ suitable remains. Control then returns to the Life System automatically.
 
 ```text
 /aicompanion task collect   # assign CollectDroppedItemsTask
+/aicompanion task follow    # assign FollowPlayerTask (nearest real player)
 /aicompanion task current   # describe the current task
 /aicompanion task status    # running flag + current + last result
 /aicompanion task cancel    # cancel and return control to Life System
 ```
+
+## 7.2 Sprint 3 follow-up - FollowPlayerTask + shared entity tracking
+
+After Sprint 3 was validated, a second task was added to pressure-test the framework's reusability
+(the "will this still work for FollowPlayer/AttackTarget?" self-check).
+
+- `CompanionNavigator.tickFollow(entity, repathInterval)`: the shared entity-tracking flow, extracted
+  from `CollectDroppedItemsTask`. Periodic repath + path follow + hazard-gated direct approach for
+  the final gap. Returns `MOVING`/`ARRIVED`/`STUCK`/`NO_PATH`. `CollectDroppedItemsTask` was
+  refactored onto it and keeps only item-specific logic (target selection, pickup detection, loop).
+- `FollowPlayerTask`: the framework's first open-ended task. It normally never returns a terminal
+  status, proving the contract supports long-running presence behaviors. Modeled on vanilla
+  `FollowOwnerGoal` min/max thresholds (with hysteresis: close in past `RESUME_DISTANCE`, stop within
+  `STOP_DISTANCE`) but never teleports — it walks back via `tickFollow`. Ends cleanly (`SUCCESS`) when
+  the player is gone/dead/changed world or lost beyond `LOSE_RANGE`, returning control to the Life
+  System.
+- Debug command: `/aicompanion task follow`.
+- Manually validated: FollowPlayer keeps distance, walks back (avoiding hazards) when the player
+  moves, and ends when the player leaves range; refactored CollectDroppedItems still avoids lava and
+  now collects every reachable item in one run.
+- Regression fixed during this follow-up: the CollectDroppedItems refactor briefly ended the task
+  after the first pickup (pickup detection returned null with a cleared target, which the SUCCESS
+  check read as "no items left"). Fixed by acquiring the next item in the same tick; the task only
+  finishes when no target remains.
 
 ## 8. First MVP
 

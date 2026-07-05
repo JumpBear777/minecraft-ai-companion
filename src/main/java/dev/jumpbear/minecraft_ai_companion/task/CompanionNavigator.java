@@ -40,6 +40,7 @@ public final class CompanionNavigator {
     private Vec3d lastProgressPos;
     private int stuckTicks;
     private int jumpInputTicks;
+    private int followRepathTimer;
 
     /**
      * Cached vanilla pathfinding proxy. It is a detached villager (never spawned into the world, so
@@ -131,6 +132,69 @@ public final class CompanionNavigator {
         path = null;
         stuckTicks = 0;
         jumpInputTicks = 0;
+        followRepathTimer = 0;
+    }
+
+    /**
+     * Continuously move toward a (possibly moving) entity: recompute the path every
+     * {@code repathInterval} ticks, follow it, and once the vanilla path reaches its end walk the
+     * final short gap straight at the entity (needed because vanilla pathing "arrives" up to ~1 block
+     * short). The direct approach is hazard-gated with the same vanilla classification the pathfinder
+     * uses, so it never walks the companion onto lava/fire/etc.
+     *
+     * <p>This is the shared entity-tracking behavior used by CollectDroppedItems, FollowPlayer, and
+     * (future) AttackTarget. Callers decide what a result means: ARRIVED = adjacent to the target
+     * (pick up / attack / wait); STUCK/NO_PATH = give up or retarget.
+     *
+     * @param target         the entity to move toward
+     * @param repathInterval ticks between path recomputations (e.g. 10-20)
+     * @return MOVING while en route, ARRIVED when adjacent, STUCK/NO_PATH when it cannot proceed
+     */
+    public NavResult tickFollow(Entity target, int repathInterval) {
+        if (--followRepathTimer <= 0 || path == null) {
+            pathToEntity(target, 1);
+            followRepathTimer = repathInterval;
+        }
+
+        if (path != null) {
+            NavResult result = tick();
+            if (result != NavResult.ARRIVED && result != NavResult.IDLE) {
+                return result;
+            }
+            // ARRIVED/IDLE falls through to the direct approach below.
+        }
+
+        return directApproach(target);
+    }
+
+    /**
+     * Walk straight at the entity for the final gap the pathfinder leaves, refusing to step into a
+     * hazard. Returns MOVING while closing in, ARRIVED once within pickup/interaction range, or
+     * STUCK if the only way forward is unsafe.
+     */
+    private NavResult directApproach(Entity target) {
+        Vec3d targetPos = target.getEntityPos();
+        double dx = targetPos.x - player.getX();
+        double dz = targetPos.z - player.getZ();
+        double horizontalSquared = dx * dx + dz * dz;
+        if (horizontalSquared <= NODE_REACHED_DISTANCE_SQUARED) {
+            CompanionInputController.releaseInput(player);
+            return NavResult.ARRIVED;
+        }
+
+        double length = Math.sqrt(horizontalSquared);
+        BlockPos nextStep = BlockPos.ofFloored(
+                player.getX() + dx / length,
+                player.getY(),
+                player.getZ() + dz / length);
+        if (isHazardAt(target.getBlockPos()) || isHazardAt(nextStep)) {
+            CompanionInputController.releaseInput(player);
+            return NavResult.STUCK;
+        }
+
+        CompanionInputController.lookAt(player, new Vec3d(targetPos.x, player.getEyeY(), targetPos.z));
+        CompanionInputController.applyServerTravelForward(player, false);
+        return NavResult.MOVING;
     }
 
     /**
