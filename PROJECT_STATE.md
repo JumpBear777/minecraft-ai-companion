@@ -260,16 +260,17 @@ Key findings:
 
 ## 7. Current Sprint
 
-Sprint 1 goal: technical feasibility study for the in-game companion representation.
+Sprint 2 goal: Life System research and first prototype.
 
 Do not implement AI gameplay yet.
 
 Focus on:
 
-- Player-like representation
-- Vanilla compatibility
-- Server-side autonomy feasibility
-- Debug commands that prove or disprove Minecraft mechanics
+- Vanilla life behavior research
+- Background idle presence
+- Pause and attention behavior
+- Strict vanilla behavior reuse
+- Avoiding custom navigation shortcuts
 - Documentation of risks before AI systems are built
 
 Current architecture direction:
@@ -277,6 +278,14 @@ Current architecture direction:
 Use a server-side `ServerPlayerEntity` with a local fake `ClientConnection`.
 
 This is intentionally not a chatbot, not a command NPC, and not yet an autonomous AI. It is a technical probe for whether a non-networked player-like entity can become the body of the future companion.
+
+Sprint 2 prototype direction:
+
+Use a small background `CompanionLifeSystem` that only runs when the companion is not busy. The first version is intentionally conservative: pause, random look-around, look-at-nearby-player, and occasional short idle wandering. Wandering uses a vanilla `VillagerEntity` pathfinding proxy with `NoPenaltyTargeting`, `MobNavigation`, `LandPathNodeMaker`, `PathNodeType` penalties, and `MobEntity.setPositionTarget(...)`, then adapts the resulting path to the `ServerPlayerEntity` body.
+
+Important Sprint 2 architecture principle:
+
+Movement-like behavior must prefer complete vanilla behavior chains over isolated feature copying. For wandering, safety, obstacle handling, fluid handling, and hazard avoidance, the relevant chain is goal/task intent -> targeting -> navigation conditions -> path node maker/types/penalties -> navigation/path -> movement execution. If the chain must break because the companion body is a `ServerPlayerEntity`, the adapter should bridge only that body mismatch.
 
 Verified so far:
 
@@ -315,6 +324,9 @@ Verified so far:
 - Boat riding and dismounting have been manually validated.
 - Bed sleep has been manually validated: daytime sleep fails as vanilla expects, nighttime sleep works, day transition wakes the companion, and explicit wake works.
 - A first `CompanionInputController` now centralizes vanilla-style look, forward, jump, and input-release operations for future AI-controlled skills.
+- Sprint 2 source research documented reusable vanilla life patterns from sheep, wolf, cat, fox, bee, villager, skeleton, and zombie.
+- A first conservative `CompanionLifeSystem` prototype now runs in the background and provides idle pauses, random look-around, nearby-player attention, and occasional vanilla-proxy idle wandering.
+- Idle wandering has been manually validated to be visible after cadence tuning and to avoid lava through the vanilla proxy/path penalty chain.
 
 Known current risks:
 
@@ -329,6 +341,7 @@ Known current risks:
 - Equipment and main-hand changes require explicit client synchronization for rendering.
 - Duration-based item use must be ticked instead of calling `finishUsing` directly.
 - Complex interactions such as containers, sleeping, riding, chunk loading, and respawn remain higher-risk than passive vanilla mechanics.
+- Life System wandering is still a prototype. It cannot directly attach `WanderAroundGoal` because the companion is not a `PathAwareEntity`, but it now reuses the vanilla villager proxy/navigation/path penalty chain before adapting movement to the player body.
 
 Latest implementation response:
 

@@ -26,31 +26,35 @@ The project is not building a chatbot NPC, a command bot, or a generic automatio
 
    The goal is player-like behavior, but the implementation research must not stop at `PlayerEntity` or `ClientPlayerEntity`. If the player path depends on a real client or is not suitable for a fake server-side player, also inspect vanilla mob and shared entity paths such as `MobEntity`, `MoveControl`, `JumpControl`, `LivingEntity`, `Entity`, navigation, attributes, and interaction managers. Prefer the mature vanilla chain that best matches the situation.
 
-5. Preserve player-like behavior.
+5. Integrated vanilla chains before isolated features.
+
+   Do not treat vanilla behavior as isolated features to reassemble manually. For movement-like behavior, first identify the full integrated chain: `Goal` / `Brain Task` -> targeting -> `NavigationConditions` -> `PathNodeMaker` / `PathNodeType` / pathfinding penalties -> `EntityNavigation` -> `MoveControl` / `JumpControl` -> entity movement. Safety, obstacle handling, fluids, hazards, and movement are part of one vanilla chain. If only part of the chain can be reused, document the exact break point and keep the adapter limited to the `ServerPlayerEntity` body difference.
+
+6. Preserve player-like behavior.
 
    Movement, gravity, water physics, damage, knockback, item use, block interaction, inventory, equipment, sleeping, riding, containers, and chunk loading should behave as close to a real player as possible.
 
-6. Patch narrowly.
+7. Patch narrowly.
 
    Mixins and internal hooks are allowed only when needed. Scope them to `AICompanion` where possible and document the vanilla behavior they preserve or restore.
 
-7. Custom logic is fallback.
+8. Custom logic is fallback.
 
    Avoid reimplementing Minecraft physics, animation, inventory, or interaction rules unless source investigation proves that the vanilla path cannot be reused.
 
-8. Document architectural exceptions.
+9. Document architectural exceptions.
 
    If a behavior cannot follow vanilla, document the reason, the tested alternatives, the remaining risk, and the likely version compatibility impact.
 
-9. Leave extension seams, not future feature code.
+10. Leave extension seams, not future feature code.
 
    Do not build mod APIs, plugin systems, or broad abstraction layers before the vanilla companion is excellent. However, avoid designs that would force rewrites later. Ask two questions before adding architecture: if future mod support never happens, is this design still good? If future mod support happens, does this design avoid a rewrite?
 
-10. Optimize for one player and one companion.
+11. Optimize for one player and one companion.
 
    The primary target is one computer, one human player, and one AI companion. Keep performance, UX, and architecture focused on that common case before scaling to many companions or server-wide automation.
 
-11. Keep LLM usage sparse.
+12. Keep LLM usage sparse.
 
    Primitive skills must not call the LLM. Most moment-to-moment behavior should run through deterministic behavior and skill code. LLM calls should be reserved for conversation, major events, long-term planning, or meaningful plan revisions.
 
@@ -64,9 +68,11 @@ This is intentional: the project should recover vanilla behavior wherever possib
 
 ## Work Rules
 
-- Do not implement AI, memory, planner, or LLM behavior during Sprint 1 unless explicitly requested.
+- Do not implement AI, memory, planner, or LLM behavior during Sprint 2 unless explicitly requested.
 - Keep changes focused on feasibility, compatibility, and player-like behavior.
 - Before changing Minecraft-facing behavior, inspect relevant Yarn source.
+- Reuse already validated project paths before introducing a new experimental path. If a behavior was previously proven stable, extend or compose that path first.
+- Do not add custom navigation or wandering shortcuts. Movement-like life behaviors must wait until a vanilla navigation chain or adapter is understood.
 - Update `PROJECT_STATE.md` or `docs/` when an architectural conclusion changes.
 - Run the Gradle build before committing when code changes are made.
 - Do not commit generated run worlds, caches, or build outputs.

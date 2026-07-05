@@ -73,6 +73,10 @@ public final class CompanionDebugCommands {
                         .executes(CompanionDebugCommands::stepForward))
                 .then(CommandManager.literal("walk_forward")
                         .executes(CompanionDebugCommands::walkForward))
+                .then(CommandManager.literal("move_control_forward")
+                        .executes(CompanionDebugCommands::moveControlForward))
+                .then(CommandManager.literal("navigation_forward")
+                        .executes(CompanionDebugCommands::navigationForward))
                 .then(CommandManager.literal("jump_forward")
                         .executes(CompanionDebugCommands::jumpForward))
                 .then(CommandManager.literal("sprint_forward")
@@ -284,6 +288,30 @@ public final class CompanionDebugCommands {
 
         boolean started = CompanionBehaviorTestTasks.jumpForward(companion.get(), source);
         source.sendFeedback(() -> Text.literal("Jump forward started through PlayerInputC2SPacket + PlayerMoveC2SPacket."), true);
+        return started ? 1 : 0;
+    }
+
+    private static int moveControlForward(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        Optional<ServerPlayerEntity> companion = requireCompanion(source);
+        if (companion.isEmpty()) {
+            return 0;
+        }
+
+        boolean started = CompanionBehaviorTestTasks.moveControlForward(companion.get(), source);
+        source.sendFeedback(() -> Text.literal("MoveControl forward started through a ServerPlayerEntity adapter based on vanilla MoveControl."), true);
+        return started ? 1 : 0;
+    }
+
+    private static int navigationForward(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        Optional<ServerPlayerEntity> companion = requireCompanion(source);
+        if (companion.isEmpty()) {
+            return 0;
+        }
+
+        boolean started = CompanionBehaviorTestTasks.navigationForward(companion.get(), source);
+        source.sendFeedback(() -> Text.literal("Navigation forward started through a vanilla mob pathfinding proxy plus ServerPlayerEntity movement adapter."), true);
         return started ? 1 : 0;
     }
 

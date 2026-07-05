@@ -13,6 +13,7 @@ public final class MinecraftAiCompanionMod implements ModInitializer {
         CompanionMiningTasks.register();
         CompanionBehaviorTestTasks.register();
         CompanionCombatHooks.register();
+        CompanionLifeSystem.register();
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> registerCommands(dispatcher));
     }
 

@@ -46,6 +46,10 @@ public final class CompanionMiningTasks {
         return true;
     }
 
+    public static boolean hasTask(ServerPlayerEntity player) {
+        return TASKS.containsKey(player.getUuid());
+    }
+
     private static final class MiningTask {
         private final ServerPlayerEntity player;
         private final BlockPos target;

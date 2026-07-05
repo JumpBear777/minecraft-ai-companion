@@ -1,9 +1,14 @@
 package dev.jumpbear.minecraft_ai_companion;
 
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.minecraft.entity.EntityType;
+import net.minecraft.entity.SpawnReason;
+import net.minecraft.entity.ai.pathing.Path;
+import net.minecraft.entity.passive.VillagerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
@@ -33,6 +38,10 @@ public final class CompanionBehaviorTestTasks {
                 }
             }
         });
+    }
+
+    public static boolean hasTask(ServerPlayerEntity player) {
+        return TASKS.containsKey(player.getUuid());
     }
 
     public static boolean observeGravity(ServerPlayerEntity player, ServerCommandSource source) {
@@ -73,6 +82,16 @@ public final class CompanionBehaviorTestTasks {
 
     public static boolean walkForward(ServerPlayerEntity player, ServerCommandSource source) {
         TASKS.put(player.getUuid(), new MovementInputTask(player, source, MovementMode.WALK_FORWARD));
+        return true;
+    }
+
+    public static boolean moveControlForward(ServerPlayerEntity player, ServerCommandSource source) {
+        TASKS.put(player.getUuid(), new MovementInputTask(player, source, MovementMode.MOVE_CONTROL_FORWARD));
+        return true;
+    }
+
+    public static boolean navigationForward(ServerPlayerEntity player, ServerCommandSource source) {
+        TASKS.put(player.getUuid(), new NavigationForwardTask(player, source));
         return true;
     }
 
@@ -121,6 +140,7 @@ public final class CompanionBehaviorTestTasks {
 
     private enum MovementMode {
         WALK_FORWARD("Walk forward"),
+        MOVE_CONTROL_FORWARD("MoveControl forward"),
         JUMP_FORWARD("Jump forward"),
         SPRINT_FORWARD("Sprint forward"),
         SNEAK_FORWARD("Sneak forward"),
@@ -393,6 +413,8 @@ public final class CompanionBehaviorTestTasks {
         private final ServerCommandSource source;
         private final MovementMode mode;
         private final Vec3d startPos;
+        private final Vec3d moveControlTarget;
+        private final CompanionVanillaMoveControl moveControl;
         private int ticks;
 
         private MovementInputTask(ServerPlayerEntity player, ServerCommandSource source, MovementMode mode) {
@@ -400,6 +422,9 @@ public final class CompanionBehaviorTestTasks {
             this.source = source;
             this.mode = mode;
             this.startPos = new Vec3d(player.getX(), player.getY(), player.getZ());
+            double yawRadians = Math.toRadians(player.getYaw());
+            this.moveControlTarget = this.startPos.add(-Math.sin(yawRadians) * 3.0D, 0.0D, Math.cos(yawRadians) * 3.0D);
+            this.moveControl = new CompanionVanillaMoveControl(player);
         }
 
         @Override
@@ -412,6 +437,7 @@ public final class CompanionBehaviorTestTasks {
             tickInput();
 
             if (ticks >= TOTAL_TICKS) {
+                moveControl.stop();
                 CompanionInputController.releaseInput(player);
                 Vec3d endPos = new Vec3d(player.getX(), player.getY(), player.getZ());
                 Vec3d velocity = player.getVelocity();
@@ -440,6 +466,10 @@ public final class CompanionBehaviorTestTasks {
         private void tickInput() {
             switch (mode) {
                 case WALK_FORWARD -> CompanionInputController.pressForward(player, false);
+                case MOVE_CONTROL_FORWARD -> {
+                    moveControl.moveTo(moveControlTarget.x, moveControlTarget.y, moveControlTarget.z, 1.0D);
+                    moveControl.tick();
+                }
                 case JUMP_FORWARD -> CompanionInputController.pressForward(player, ticks == 1 && player.isOnGround());
                 case SPRINT_FORWARD -> CompanionInputController.pressForward(player, false, false, true);
                 case SNEAK_FORWARD -> CompanionInputController.pressForward(player, false, true, false);
@@ -543,6 +573,158 @@ public final class CompanionBehaviorTestTasks {
             }
 
             return player.isOnGround() && (player.horizontalCollision || stuckTicks >= 8);
+        }
+    }
+
+    private static final class NavigationForwardTask implements BehaviorTask {
+        private static final int TOTAL_TICKS = 200;
+        private static final double TARGET_DISTANCE = 8.0D;
+        private static final double NODE_REACHED_DISTANCE_SQUARED = 0.45D * 0.45D;
+
+        private final ServerPlayerEntity player;
+        private final ServerCommandSource source;
+        private final Vec3d startPos;
+        private Vec3d lastProgressPos;
+        private Path path;
+        private BlockPos target;
+        private int ticks;
+        private int stuckTicks;
+        private int jumpInputTicks;
+        private boolean failed;
+        private String failureReason = "";
+
+        private NavigationForwardTask(ServerPlayerEntity player, ServerCommandSource source) {
+            this.player = player;
+            this.source = source;
+            this.startPos = new Vec3d(player.getX(), player.getY(), player.getZ());
+            this.lastProgressPos = this.startPos;
+        }
+
+        @Override
+        public boolean tick() {
+            if (player.isRemoved()) {
+                return true;
+            }
+
+            if (path == null && !failed) {
+                createPath();
+            }
+
+            if (failed) {
+                CompanionInputController.releaseInput(player);
+                source.sendFeedback(() -> Text.literal("Navigation forward failed: " + failureReason), true);
+                return true;
+            }
+
+            ticks++;
+            advanceReachedNodes();
+            if (path.isFinished()) {
+                CompanionInputController.releaseInput(player);
+                Vec3d endPos = new Vec3d(player.getX(), player.getY(), player.getZ());
+                source.sendFeedback(() -> Text.literal(String.format(
+                        "Navigation forward reached path end: target=%s pathLength=%d pos %.2f %.2f %.2f -> %.2f %.2f %.2f ticks=%d",
+                        target.toShortString(),
+                        path.getLength(),
+                        startPos.x,
+                        startPos.y,
+                        startPos.z,
+                        endPos.x,
+                        endPos.y,
+                        endPos.z,
+                        ticks)), true);
+                return true;
+            }
+
+            if (ticks >= TOTAL_TICKS) {
+                CompanionInputController.releaseInput(player);
+                Vec3d endPos = new Vec3d(player.getX(), player.getY(), player.getZ());
+                source.sendFeedback(() -> Text.literal(String.format(
+                        "Navigation forward timed out: target=%s node=%d/%d pos %.2f %.2f %.2f -> %.2f %.2f %.2f",
+                        target.toShortString(),
+                        path.getCurrentNodeIndex(),
+                        path.getLength(),
+                        startPos.x,
+                        startPos.y,
+                        startPos.z,
+                        endPos.x,
+                        endPos.y,
+                        endPos.z)), true);
+                return true;
+            }
+
+            Vec3d nodePos = path.getNodePosition(player);
+            CompanionInputController.lookAt(player, new Vec3d(nodePos.x, player.getEyeY(), nodePos.z));
+            if (shouldJumpToward(nodePos) && jumpInputTicks == 0) {
+                jumpInputTicks = 8;
+            }
+
+            boolean jumpInput = jumpInputTicks > 0;
+            CompanionInputController.applyServerTravelForward(player, jumpInput);
+            if (jumpInputTicks > 0) {
+                jumpInputTicks--;
+            }
+            return false;
+        }
+
+        private void createPath() {
+            if (!(player.getEntityWorld() instanceof ServerWorld world)) {
+                failed = true;
+                failureReason = "not in a server world";
+                return;
+            }
+
+            double yawRadians = Math.toRadians(player.getYaw());
+            Vec3d targetPos = startPos.add(-Math.sin(yawRadians) * TARGET_DISTANCE, 0.0D, Math.cos(yawRadians) * TARGET_DISTANCE);
+            target = BlockPos.ofFloored(targetPos);
+
+            VillagerEntity proxy = EntityType.VILLAGER.create(world, SpawnReason.COMMAND);
+            if (proxy == null) {
+                failed = true;
+                failureReason = "could not create vanilla pathfinding proxy";
+                return;
+            }
+
+            proxy.refreshPositionAndAngles(player.getX(), player.getY(), player.getZ(), player.getYaw(), player.getPitch());
+            proxy.setAiDisabled(true);
+            proxy.setNoGravity(true);
+            proxy.setOnGround(player.isOnGround());
+
+            path = proxy.getNavigation().findPathTo(target, 1);
+            if (path == null || path.getLength() == 0) {
+                failed = true;
+                failureReason = "vanilla pathfinder returned no path to " + target.toShortString();
+            }
+        }
+
+        private void advanceReachedNodes() {
+            while (!path.isFinished()) {
+                Vec3d nodePos = path.getNodePosition(player);
+                double dx = player.getX() - nodePos.x;
+                double dz = player.getZ() - nodePos.z;
+                boolean closeHorizontally = dx * dx + dz * dz <= NODE_REACHED_DISTANCE_SQUARED;
+                boolean closeVertically = Math.abs(player.getY() - nodePos.y) < 1.1D;
+                if (!closeHorizontally || !closeVertically) {
+                    return;
+                }
+
+                path.next();
+            }
+        }
+
+        private boolean shouldJumpToward(Vec3d nodePos) {
+            Vec3d currentPos = new Vec3d(player.getX(), player.getY(), player.getZ());
+            double movedX = currentPos.x - lastProgressPos.x;
+            double movedZ = currentPos.z - lastProgressPos.z;
+            double movedSquared = movedX * movedX + movedZ * movedZ;
+            if (movedSquared < 0.0004D) {
+                stuckTicks++;
+            } else {
+                stuckTicks = 0;
+                lastProgressPos = currentPos;
+            }
+
+            boolean nextNodeIsHigher = nodePos.y > player.getY() + 0.5D;
+            return player.isOnGround() && (nextNodeIsHigher || player.horizontalCollision || stuckTicks >= 8);
         }
     }
 }
