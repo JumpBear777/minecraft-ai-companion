@@ -3,6 +3,7 @@ package dev.jumpbear.minecraft_ai_companion;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.datafixers.util.Pair;
+import dev.jumpbear.minecraft_ai_companion.task.AttackTargetTask;
 import dev.jumpbear.minecraft_ai_companion.task.CollectDroppedItemsTask;
 import dev.jumpbear.minecraft_ai_companion.task.CompanionTask;
 import dev.jumpbear.minecraft_ai_companion.task.CompanionTaskManager;
@@ -182,6 +183,8 @@ public final class CompanionDebugCommands {
                                 .executes(CompanionDebugCommands::taskCollect))
                         .then(CommandManager.literal("follow")
                                 .executes(CompanionDebugCommands::taskFollow))
+                        .then(CommandManager.literal("attack")
+                                .executes(CompanionDebugCommands::taskAttack))
                         .then(CommandManager.literal("current")
                                 .executes(CompanionDebugCommands::taskCurrent))
                         .then(CommandManager.literal("status")
@@ -222,6 +225,19 @@ public final class CompanionDebugCommands {
         ServerPlayerEntity player = companion.get();
         CompanionTaskManager.assign(player, new FollowPlayerTask());
         source.sendFeedback(() -> Text.literal("Task assigned: FollowPlayer"), true);
+        return 1;
+    }
+
+    private static int taskAttack(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        Optional<ServerPlayerEntity> companion = requireCompanion(source);
+        if (companion.isEmpty()) {
+            return 0;
+        }
+
+        ServerPlayerEntity player = companion.get();
+        CompanionTaskManager.assign(player, new AttackTargetTask(player));
+        source.sendFeedback(() -> Text.literal("Task assigned: AttackTarget"), true);
         return 1;
     }
 

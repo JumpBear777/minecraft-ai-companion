@@ -483,6 +483,7 @@ suitable remains. Control then returns to the Life System automatically.
 ```text
 /aicompanion task collect   # assign CollectDroppedItemsTask
 /aicompanion task follow    # assign FollowPlayerTask (nearest real player)
+/aicompanion task attack    # assign AttackTargetTask (nearest hostile mob)
 /aicompanion task current   # describe the current task
 /aicompanion task status    # running flag + current + last result
 /aicompanion task cancel    # cancel and return control to Life System
@@ -511,6 +512,24 @@ After Sprint 3 was validated, a second task was added to pressure-test the frame
   after the first pickup (pickup detection returned null with a cleared target, which the SUCCESS
   check read as "no items left"). Fixed by acquiring the next item in the same tick; the task only
   finishes when no target remains.
+
+## 7.3 AttackTargetTask - reach-then-act
+
+Third task, and the first that combines shared entity tracking with an existing vanilla interaction
+path. It validates the "walk into range, then perform a vanilla action" shape that ChopTree /
+BuildStructure will also use.
+
+- `AttackTargetTask`: lock the nearest `HostileEntity`, `tickFollow` into range, then attack.
+- Vanilla-first: attack range reads `getEntityInteractionRange()` (attribute, not a constant);
+  swings only when `getAttackCooldownProgress(0.5F) >= 1.0` (a fully charged hit); damage/knockback/
+  crits/sweeping/enchantments are all handled by `player.attack(target)`; chasing via `tickFollow`
+  keeps the hazard gate, so it will not walk into lava to reach a mob.
+- Retargets to the next mob in the same tick when one dies (same fix pattern as CollectDroppedItems),
+  finishing `SUCCESS` only when no hostiles remain.
+- Debug command: `/aicompanion task attack`. A weapon is optional (bare-hand attack works); use
+  `/aicompanion equip_tool` for a sword during testing.
+- Manually validated: companion walks to the nearest hostile, attacks on cooldown, retargets after a
+  kill, finishes when none remain, and does not chase a mob into lava.
 
 ## 8. First MVP
 
