@@ -1,6 +1,7 @@
 package dev.jumpbear.minecraft_ai_companion.task;
 
 import net.minecraft.entity.ItemEntity;
+import net.minecraft.item.ItemStack;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.math.Box;
 
@@ -9,6 +10,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
 
 /**
  * First complete autonomous task: collect nearby dropped items until none remain.
@@ -21,6 +23,11 @@ import java.util.UUID;
  * keeps only the item-specific logic: choose the nearest non-skipped item, detect pickup, and loop
  * until nothing suitable remains. Items that time out or cannot be reached are skipped (remembered)
  * so the loop always makes progress.
+ *
+ * <p>A {@link Predicate} filter decides <em>which</em> dropped items are worth going to (the same role
+ * MineColonies' {@code isItemWorthPickingUp} plays). The no-filter constructor collects everything —
+ * handy for a bare {@code /aicompanion task collect}. Chained after a chore, a caller passes a
+ * narrower filter so, e.g., a lumberjack only gathers logs and saplings and ignores unrelated drops.
  */
 public final class CollectDroppedItemsTask implements CompanionTask {
     private static final double SEARCH_RADIUS = 24.0D;
@@ -30,14 +37,34 @@ public final class CollectDroppedItemsTask implements CompanionTask {
     private static final int REPATH_INTERVAL = 20;
 
     private final CompanionNavigator navigator;
+    private final Predicate<ItemStack> filter;
     private final Set<UUID> skipped = new HashSet<>();
 
     private UUID targetId;
     private int targetTicks;
     private int collected;
+    /**
+     * One retry sweep: an item that timed out or briefly could not be reached is remembered in
+     * {@link #skipped} and dropped from the main pass so the loop makes progress. Once nothing fresh
+     * remains, the skipped set is retried a single time (the item may have settled, or the companion
+     * may now be standing somewhere it can reach it) before the task ends. This is what stops the pass
+     * from leaving a few reachable drops behind — "pick up cleanly" — without looping forever.
+     */
+    private boolean retriedSkipped;
 
+    /** Collect every dropped item within range (no filtering). */
     public CollectDroppedItemsTask(ServerPlayerEntity companion) {
+        this(companion, stack -> true);
+    }
+
+    /**
+     * Collect only dropped items whose stack matches {@code filter}. Unmatched items are never
+     * targeted (a stray drop the companion happens to walk over is still picked up by vanilla — the
+     * filter only governs what it deliberately goes to).
+     */
+    public CollectDroppedItemsTask(ServerPlayerEntity companion, Predicate<ItemStack> filter) {
         this.navigator = new CompanionNavigator(companion);
+        this.filter = filter;
     }
 
     @Override
@@ -50,8 +77,16 @@ public final class CollectDroppedItemsTask implements CompanionTask {
         ItemEntity target = resolveOrAcquireTarget(companion);
         if (target == null) {
             if (targetId == null) {
-                // Nothing suitable left within range. Only FAILURE if items existed but every one
-                // was unreachable (all skipped, nothing collected); otherwise the objective is done.
+                // Nothing suitable left in the fresh set. Before ending, retry the skipped items once:
+                // an item that timed out or was momentarily unreachable may now be reachable (it
+                // settled, or the companion moved). This is the "pick up cleanly" sweep.
+                if (!retriedSkipped && !skipped.isEmpty()) {
+                    retriedSkipped = true;
+                    skipped.clear();
+                    return TaskStatus.RUNNING;
+                }
+                // Only FAILURE if items existed but every one was unreachable even after the retry
+                // sweep (all skipped, nothing collected); otherwise the objective is done.
                 boolean nothingCollectedButItemsSkipped = collected == 0 && !skipped.isEmpty();
                 return nothingCollectedButItemsSkipped ? TaskStatus.FAILURE : TaskStatus.SUCCESS;
             }
@@ -121,6 +156,7 @@ public final class CollectDroppedItemsTask implements CompanionTask {
                 box,
                 item -> item.isAlive()
                         && !item.getStack().isEmpty()
+                        && filter.test(item.getStack())
                         && !skipped.contains(item.getUuid()));
         return items.stream()
                 .min(Comparator.comparingDouble(companion::squaredDistanceTo))

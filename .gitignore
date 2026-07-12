@@ -13,3 +13,8 @@ run/
 
 .DS_Store
 Thumbs.db
+
+# 本地工具配置 / 产物，不入库
+.claude/
+.codex/
+.mcp.json

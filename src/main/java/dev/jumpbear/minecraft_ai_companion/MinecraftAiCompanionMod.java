@@ -16,6 +16,9 @@ public final class MinecraftAiCompanionMod implements ModInitializer {
         CompanionCombatHooks.register();
         CompanionTaskManager.register();
         CompanionLifeSystem.register();
+        // Registered last: on any tick the companion is in water, its self-rescue input must win over
+        // whatever a task or the Life System set this tick, so surfacing always takes priority.
+        CompanionWaterSafety.register();
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> registerCommands(dispatcher));
     }
 

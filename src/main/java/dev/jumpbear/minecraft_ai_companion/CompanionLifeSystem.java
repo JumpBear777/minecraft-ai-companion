@@ -90,9 +90,11 @@ public final class CompanionLifeSystem {
     private static void chooseNextBehavior(ServerPlayerEntity player, LifeState state) {
         Optional<ServerPlayerEntity> nearbyPlayer = findNearbyRealPlayer(player);
         int roll = state.random.nextInt(100);
-        if (roll < 85 && startWander(player, state)) {
-            return;
-        }
+        // 临时关闭「闲逛(WANDER)」——便于树扫描测试期间同伴保持原地不动。
+        // 需要恢复闲逛时，取消下面这段注释即可。
+        // if (roll < 85 && startWander(player, state)) {
+        //     return;
+        // }
 
         if (nearbyPlayer.isPresent() && roll < 93) {
             startLookAtPlayer(state, nearbyPlayer.get());

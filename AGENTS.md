@@ -92,6 +92,21 @@ Rules for new tasks:
 - Before adding a task, confirm the design still fits `FollowPlayer`, `ChopTree`, `AttackTarget`,
   `BuildStructure`, `ExploreArea`, and future modded skills. If it does not, redesign first.
 
+Tasks implemented so far: `CollectDroppedItemsTask`, `FollowPlayerTask`, `AttackTargetTask`.
+
+A first `ChopTreeTask` was built and then **removed from `main`** — it had accumulated too many
+interacting bugs to trust, and woodcutting is being redone from scratch. The pre-removal snapshot
+lives on branch `archive/chop-module` (commit `5801ab0`); see `PROJECT_STATE.md` §7.4. Its two
+reusable, chop-independent adapters were kept on `main` and are the intended foundation for the redo:
+`CompanionPillar` (jump + place-at-apex to build straight up) and `CompanionHotbar` (bring an
+inventory block/tool into hand via vanilla slot selection/swap). Both were spiked and validated
+in-world on their own before being composed. When redoing woodcutting, recognize trees via the
+vanilla `BlockTags.LOGS` tag, walk into `canInteractWithBlockAt` range through `CompanionNavigator`,
+and reuse `CompanionMiningTasks` for vanilla block breaking rather than reimplementing a break loop —
+and keep following the "extract a verified adapter, then compose" path rather than inlining new
+movement/interaction primitives into one monolithic task (that monolith is exactly what accumulated
+the bugs).
+
 ## Work Rules
 
 - Do not implement AI, memory, planner, or LLM behavior unless explicitly requested. Sprint 3 is scoped to the Task System foundation; the planner that assigns tasks is a future sprint.

@@ -2,7 +2,7 @@
 
 Project: Minecraft AI Companion  
 Version: 0.1 (Sprint 3)  
-Last Updated: 2026-07-05
+Last Updated: 2026-07-09
 
 ## 1. Project Vision
 
@@ -530,6 +530,118 @@ BuildStructure will also use.
   `/aicompanion equip_tool` for a sword during testing.
 - Manually validated: companion walks to the nearest hostile, attacks on cooldown, retargets after a
   kill, finishes when none remain, and does not chase a mob into lava.
+
+## 7.4 ChopTreeTask - ARCHIVED and removed from main (2026-07-08)
+
+The first woodcutting task and everything built on top of it (`ChopTreeTask`, `HarvestLogsTask`,
+`CompanionPacing`, the `CompanionPillarTasks` spike, and the `docs/chop-tree-bug-{review,audit}.md`
+notes) **were removed from `main`**. The module had accumulated too many interacting bugs to trust,
+so rather than keep patching it, the whole chop layer was snapshotted and deleted; woodcutting is
+being **redone from scratch** on top of the reusable foundation it left behind.
+
+- The full pre-removal state is preserved on branch **`archive/chop-module`** (commit
+  `5801ab0 "Archive chop tree module before removal"`), recoverable at any time. It is **not** an
+  ancestor of `main`.
+- What was intentionally *kept* on `main` (validated, chop-free adapters — this is the redo's
+  foundation, not throwaway code):
+  - `CompanionHotbar` — held-item switching: `selectBlock`, `selectScaffoldBlock`,
+    `selectBestToolFor` (picks the fastest inventory tool via vanilla
+    `ItemStack.getMiningSpeedMultiplier`), `selectItem`. See §7.5.
+  - `CompanionPillar` — pillar straight up N levels. Validated in-world. See §7.5.
+  - `CompanionMiningTasks` — now exposes `pollResult` (BROKEN/FAILED), `cancel`, and
+    unbreakable/out-of-reach/timeout bailouts, so a caller can tell whether a break actually
+    destroyed the block.
+  - `CompanionNavigator` — gained cliff/pit drop-hazard gating (`isDropHazard`), an approach
+    stuck-detector, and a near-range "commit to the direct walk" rule that fixed the head-oscillation
+    ("摇头") while approaching a fractional target.
+  - `CompanionTaskManager` — a real per-companion task **queue**: `enqueue` and `enqueueOnSuccess`
+    (run only if the predecessor finished SUCCESS). See §7.3 (task queue).
+  - `CollectDroppedItemsTask` — a `Predicate<ItemStack>` filter (which drops are worth going to) plus
+    a one-shot retry sweep of skipped items.
+  - `CompanionWaterSafety` — self-rescue when the companion is in water; registered last so surfacing
+    outranks whatever a task or the Life System set that tick.
+- The `/aicompanion task chop` debug command was removed with the task.
+
+**Redo status:** woodcutting is being rebuilt incrementally, one capability at a time, composing the
+validated adapters above instead of one monolithic task. The subsections below (§7.5 adapters, §7.3
+task queue) describe pieces that survived the removal and remain valid.
+
+## 7.5 Pillar-up and held-item adapters (reach logs above interaction range)
+
+Two reusable adapters, prompted by "a real player builds up to reach a high block instead of giving
+up". Each was built and validated in-world as its own independently-verifiable step (same discipline
+as the navigator extraction). They were originally composed into the now-archived ChopTree module
+(§7.4) but are **chop-independent and remain on `main`** as general capabilities for the redo and
+any future reach-a-high-block task.
+
+- `CompanionPillar` (in `task`): pillar the companion straight up N levels — jump, place a block
+  from the main hand onto the stand block during the jump apex, land on it, repeat. The verified
+  timing: `World.canPlace` checks the candidate block against the player collision box, so the feet
+  block can only be filled once the jump lifts the player a full block clear of it (place when
+  `getY() - standY >= 1.0`, near the apex). Reuses `CompanionInputController.pressJumpOnly` +
+  `interactionManager.interactBlock`; swings on placement so the animation shows. No new Mixin, no
+  access widener. Spike lives in `CompanionPillarTasks` (`/aicompanion pillar_up`,
+  `/aicompanion pillar_up_n <count>`).
+- `CompanionHotbar` (in `task`): bring an inventory item into the main hand via the vanilla selection
+  path — `setSelectedSlot` if it is already in the hotbar, else `swapSlotWithHotbar` from the lower
+  inventory. Never force-sets the stack, so no dupe/loss. All post-change sync converges in
+  `onHeldItemChanged`, which today only sends the main-hand `EntityEquipmentUpdateS2CPacket` to nearby
+  viewers; that method is the seam a future "view the companion's inventory" feature would extend.
+  Debug command `/aicompanion select_block`.
+- Verified in-world (2026-07-06):
+  - `pillar_up`: one level, `success=true`, Y 77.00 -> 78.00, block placed, 14 ticks.
+  - `pillar_up_n <count>`: builds exactly `count` levels via the adapter.
+  - `select_block` with an axe in hand and `/give AICompanion oak_planks 16` into the inventory:
+    `found=true`, selected slot 0 -> 1, hand axe -> 16x oak planks (axe preserved, nothing lost),
+    held item re-rendered for viewers.
+- Note: use vanilla `/give AICompanion <item> <n>` to place items in the inventory for testing; the
+  debug `give_blocks`/`equip_tool` both `setStackInHand` into the selected slot and overwrite each
+  other, so they cannot set up "hand holds X, want Y from the inventory".
+
+## 7.3 Task queue + woodcutting features (queue KEPT, chop features ARCHIVED)
+
+This section originally documented four woodcutting features plus the first real task queue, built on
+the ChopTree state machine. When ChopTree was removed (§7.4), the **task queue survived on `main`**
+(it is chop-independent) while the **four chop-specific features went to `archive/chop-module`** with
+the task. Split below so the redo knows exactly what it can still build on.
+
+### Task queue (KEPT on main)
+
+`CompanionTaskManager` has a per-companion `Deque` and two enqueue entry points:
+
+- `enqueue(task)` — run after the active task (and anything already queued) finishes, regardless of
+  how the predecessor ended.
+- `enqueueOnSuccess(task)` — run only if the task immediately before it finished `SUCCESS`; otherwise
+  the task is dropped without running and without overwriting the last status, so a failed
+  predecessor stays visible instead of being masked by an empty follow-up pass.
+- `assign(task)` is the hard-interrupt entry (cancel current + clear queue); `cancel` clears the whole
+  queue.
+
+This realizes the previously-deferred "task queue" extension point. It is how one command can express
+a multi-step chore — e.g. a future "fell this tree, then pick up the wood" would be
+`assign(ChopTree)` + `enqueueOnSuccess(Collect with a log/sapling filter)`.
+
+### Woodcutting features (ARCHIVED with ChopTree on `archive/chop-module`)
+
+These were removed from `main` along with ChopTree. Recorded here as design reference for the redo,
+**not as current behavior**:
+
+1. Tool switching — `CompanionHotbar.selectBestToolFor` picks the fastest inventory tool via vanilla
+   `ItemStack.getMiningSpeedMultiplier(state)` (no hard-coded block→tool table). **The `CompanionHotbar`
+   adapter itself is KEPT on main (§7.5);** only its ChopTree wiring is gone.
+2. Replant sapling — a `REPLANT` finishing phase that planted a matching sapling on the stump. Removed
+   with ChopTree.
+3. Reclaim self-placed blocks — a `RECLAIM` phase that mined the pillar column back down. Removed with
+   ChopTree.
+4. Gather own harvest — `CollectDroppedItemsTask` gained a `Predicate<ItemStack>` filter. **The filter
+   is KEPT on main (§7.4 kept-list);** only ChopTree's use of it (`isTreeYield`) is gone.
+
+Reference groundwork (still valid): MineColonies (模拟殖民地) source cloned to
+`D:\WorkSpace\mc-sources\minecolonies` (MC 1.20.1 / Forge — **architecture reference only, not a 1.21
+API reference**) and indexed via `codebase-memory-mcp`; this project's `.mcp.json` makes that MCP
+available. Its lumberjack chain (`EntityAIWorkLumberjack`/`Tree`/`PathJobFindTree`/`AbstractPathJob`)
+is a useful design reference for the redo — note it fells top-down whereas our body is a real player
+with ~4.5-block reach, so the redo will need its own reach strategy (pillar up, or fell bottom-up).
 
 ## 8. First MVP
 

@@ -79,6 +79,20 @@ public final class CompanionInputController {
         setSprinting(player, false);
     }
 
+    /**
+     * Level the view to the horizon (pitch 0), keeping the current yaw. A task that pointed the head
+     * up or down (e.g. mining a log overhead) must call this when it finishes, otherwise the fake
+     * player has no client to recentre the camera and the companion is left staring up/down until some
+     * other behavior happens to move its head.
+     */
+    public static void resetPitch(ServerPlayerEntity player) {
+        player.networkHandler.onPlayerMove(new PlayerMoveC2SPacket.LookAndOnGround(
+                player.getYaw(),
+                0.0F,
+                player.isOnGround(),
+                player.horizontalCollision));
+    }
+
     public static void applyServerTravelForward(ServerPlayerEntity player, boolean jump) {
         player.networkHandler.onPlayerInput(new PlayerInputC2SPacket(
                 new PlayerInput(true, false, false, false, jump, false, false)));
