@@ -28,7 +28,25 @@ public final class CompanionLifeSystem {
     private static final int WANDER_ANCHOR_RANGE = 24;
     private static final Map<UUID, LifeState> STATES = new HashMap<>();
 
+    /**
+     * Whether the idle WANDER behavior is enabled. On by default. Flipped off by
+     * {@code /aicompanion wander off} so the companion stays put during tree/interaction testing,
+     * and back on by {@code /aicompanion wander on} — replacing the old approach of commenting out
+     * the wander branch (which was accidentally committed to main and silently disabled wandering).
+     */
+    private static volatile boolean wanderEnabled = true;
+
     private CompanionLifeSystem() {
+    }
+
+    /** Enable/disable idle wandering at runtime (debug command). */
+    public static void setWanderEnabled(boolean enabled) {
+        wanderEnabled = enabled;
+    }
+
+    /** @return whether idle wandering is currently enabled. */
+    public static boolean isWanderEnabled() {
+        return wanderEnabled;
     }
 
     public static void register() {
@@ -90,11 +108,10 @@ public final class CompanionLifeSystem {
     private static void chooseNextBehavior(ServerPlayerEntity player, LifeState state) {
         Optional<ServerPlayerEntity> nearbyPlayer = findNearbyRealPlayer(player);
         int roll = state.random.nextInt(100);
-        // 临时关闭「闲逛(WANDER)」——便于树扫描测试期间同伴保持原地不动。
-        // 需要恢复闲逛时，取消下面这段注释即可。
-        // if (roll < 85 && startWander(player, state)) {
-        //     return;
-        // }
+        // 闲逛（WANDER）：默认开启，占主要权重；测试期可用 /aicompanion wander off 临时关闭让同伴原地不动。
+        if (wanderEnabled && roll < 85 && startWander(player, state)) {
+            return;
+        }
 
         if (nearbyPlayer.isPresent() && roll < 93) {
             startLookAtPlayer(state, nearbyPlayer.get());

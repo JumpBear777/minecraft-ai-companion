@@ -12,8 +12,10 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -42,11 +44,23 @@ public final class TreeDetector {
     /** 种子搜索从同伴脚下向上延伸的距离。 */
     private static final int SEARCH_UP = 8;
     /**
-     * 单次洪水填充能收集的原木数量硬上限。这是防止把连片森林（丛林树冠、深色橡木林）
-     * 当成一棵「树」拉进来的保险：一旦达到这个数量就停止扩张，把已收集到的当作该簇，
-     * 既限制了计算量，也让单个砍树目标保持在合理规模。
+     * 单次洪水填充能收集的原木数量硬上限，兼作「连片森林」的拒绝阈值。natural 单树（含丛林高树、
+     * 深色橡木 2×2）的原木数远低于此；一旦洪泛<b>达到</b>这个上限，说明簇仍在扩张、多半是连成一片的
+     * 树林或原木建筑——此时<b>整棵拒绝</b>（{@code truncated=true}），绝不砍其中一部分（部分砍伐会留下
+     * 残桩、并让后续扫描把残桩当新 base）。128 对任何单棵原版树都绰绰有余。
      */
-    private static final int MAX_TREE_LOGS = 256;
+    private static final int MAX_TREE_LOGS = 128;
+    /**
+     * 单个 Y 层允许的最大原木数。这是「原木地板/墙壁」这类建筑的判据：natural 树最粗的一层也就是
+     * 深色橡木的 2×2=4；一层里挤着远多于此的原木是平铺的原木结构。设为 9（3×3）留足余量，既放行任何
+     * natural 主干/分叉层，又能挡下明显平铺的原木建筑。
+     */
+    private static final int MAX_LOGS_PER_LAYER = 9;
+    /**
+     * 「矮而宽」建筑判据用的最小水平跨度。natural 矮树/树桩的原木几乎只竖直堆叠（水平跨度 ≤2）；
+     * 高度 ≤2 却水平铺开 ≥ 此值的原木簇是栅栏/原木排/地板，拒绝。
+     */
+    private static final int WIDE_SHORT_MIN_HORIZONTAL = 3;
     /**
      * 一个原木簇要被判定为真实树木，其周围所需的<em>自然</em>（非持久化）树叶最少数量。
      * 这个过滤条件用于排除玩家搭建的原木结构（原木小屋、栅栏、柱子）——它们周围没有
@@ -69,8 +83,9 @@ public final class TreeDetector {
      *             任务可以直接消费整簇（例如自底向上挖），无需重新扫描。
      * @param base 树干根部：整簇中 Y 最低的原木；Y 相同时用打包坐标作决定性 tiebreak，
      *             保证选取结果稳定。
+     * @param evidence 该簇被接受为自然树的形状证据（供诊断与可重复测试断言）。
      */
-    public record Tree(List<BlockPos> logs, BlockPos base) {
+    public record Tree(List<BlockPos> logs, BlockPos base, TreePlan.Evidence evidence) {
     }
 
     /**
@@ -112,19 +127,24 @@ public final class TreeDetector {
                 return Optional.empty();
             }
 
-            List<BlockPos> logs = floodFillTree(world, seed);
-            if (isNaturalTree(world, logs)) {
+            FloodResult flood = floodFillTree(world, seed);
+            Optional<TreePlan.Evidence> evidence = flood.truncated()
+                    ? Optional.empty() // 连通簇触顶：连片林/原木建筑，整棵拒绝，不砍一部分
+                    : validateAndDescribe(world, flood.logs());
+            if (evidence.isPresent()) {
+                List<BlockPos> logs = flood.logs();
                 BlockPos base = logs.stream()
                         // 最低的原木即树干根部；asLong() 打破平局，使同 Y 的两块原木总能
                         // 解析到同一个 base。
                         .min(Comparator.<BlockPos>comparingInt(BlockPos::getY)
                                 .thenComparingLong(BlockPos::asLong))
                         .orElse(seed);
-                return Optional.of(new Tree(logs, base));
+                return Optional.of(new Tree(logs, base, evidence.get()));
             }
 
-            // 不是自然树——把这一簇里的每块原木都禁止用作后续种子，然后继续寻找下一个候选。
-            for (BlockPos log : logs) {
+            // 未通过判定（非自然树 / 建筑 / 连片林）——把这一簇里的每块原木都禁止用作后续种子，
+            // 然后继续寻找下一个候选。
+            for (BlockPos log : flood.logs()) {
                 rejected.add(log.asLong());
             }
         }
@@ -167,13 +187,21 @@ public final class TreeDetector {
         return nearest;
     }
 
+    /** 洪水填充结果：收集到的原木簇，加上「是否因触顶而被截断」的标记。 */
+    private record FloodResult(List<BlockPos> logs, boolean truncated) {
+    }
+
     /**
      * 从 {@code seed} 开始，用 26 向（面 + 棱 + 角）邻接做洪水填充，收集连通的原木簇，
-     * 使自然树干／枝条上对角相接的原木仍归为同一簇。扩张在达到 {@link #MAX_TREE_LOGS} 时停止。
+     * 使自然树干／枝条上对角相接的原木仍归为同一簇。
      *
-     * @return 该簇的原木，按发现（BFS）顺序排列。
+     * <p>扩张在<b>还差一步就要超过</b> {@link #MAX_TREE_LOGS} 时停止，并把 {@code truncated} 置真：
+     * 一旦簇长到这个规模仍未收敛，几乎必然是连成一片的树林或平铺原木结构，调用方会据此<b>整棵拒绝</b>，
+     * 绝不砍其中一部分。
+     *
+     * @return 该簇的原木（按 BFS 发现顺序）与截断标记。
      */
-    private static List<BlockPos> floodFillTree(World world, BlockPos seed) {
+    private static FloodResult floodFillTree(World world, BlockPos seed) {
         List<BlockPos> logs = new ArrayList<>();
         Set<Long> visited = new HashSet<>();
         Deque<BlockPos> queue = new ArrayDeque<>();
@@ -181,7 +209,10 @@ public final class TreeDetector {
         queue.add(seed);
         visited.add(seed.asLong());
 
-        while (!queue.isEmpty() && logs.size() < MAX_TREE_LOGS) {
+        while (!queue.isEmpty()) {
+            if (logs.size() >= MAX_TREE_LOGS) {
+                return new FloodResult(logs, true); // 触顶：判定为连片林/建筑，交由调用方整棵拒绝
+            }
             BlockPos current = queue.poll();
             logs.add(current);
 
@@ -206,15 +237,71 @@ public final class TreeDetector {
             }
         }
 
-        return logs;
+        return new FloodResult(logs, false);
     }
 
     /**
-     * 一个原木簇若被至少 {@link #MIN_TREE_LEAVES} 块自然树叶包围，即判定为自然树。
-     * 我们围绕每块原木做 {@link #LEAF_SEARCH_RADIUS} 半径的盒搜索，统计不重复的自然树叶
-     * 位置；用「不重复集合」是为了防止同一块紧邻多块原木的树叶被重复计数。
+     * 判定一个原木簇是否为可砍的<b>自然树</b>，通过则连同形状证据一并返回。判据（全过才接受）：
+     * <ol>
+     *   <li><b>被自然叶包围</b>：至少 {@link #MIN_TREE_LEAVES} 块 {@code persistent=false} 的树叶，
+     *       用于排除周围没有自然树叶的玩家原木结构（小屋、栅栏、柱子）。</li>
+     *   <li><b>非平铺墙/地板</b>：任一 Y 层的原木数不超过 {@link #MAX_LOGS_PER_LAYER}——natural 树最粗的
+     *       一层也就是深色橡木的 2×2；一层里挤着远多于此的原木是平铺原木结构。</li>
+     *   <li><b>非矮而宽</b>：高度 ≤2 却水平铺开 ≥ {@link #WIDE_SHORT_MIN_HORIZONTAL} 的原木簇是原木排/
+     *       地板，而 natural 矮树的原木近乎竖直堆叠。</li>
+     * </ol>
+     * 这些是<b>保守的事后形状校验</b>（配合 26 邻接洪泛）：宁可漏掉个别畸形 natural 树，也不误砍玩家
+     * 建筑。归属判定本质是启发式，玩家紧贴真树 2 格内搭的原木仍可能借真树叶被接受（低概率残留，已知）。
+     *
+     * @return 通过则含形状证据；否则空。
      */
-    private static boolean isNaturalTree(World world, List<BlockPos> logs) {
+    private static Optional<TreePlan.Evidence> validateAndDescribe(World world, List<BlockPos> logs) {
+        if (logs.isEmpty()) {
+            return Optional.empty();
+        }
+
+        // 形状度量：包围盒、每层原木数。
+        int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
+        int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
+        int minZ = Integer.MAX_VALUE, maxZ = Integer.MIN_VALUE;
+        Map<Integer, Integer> logsPerLayer = new HashMap<>();
+        for (BlockPos log : logs) {
+            minX = Math.min(minX, log.getX());
+            maxX = Math.max(maxX, log.getX());
+            minY = Math.min(minY, log.getY());
+            maxY = Math.max(maxY, log.getY());
+            minZ = Math.min(minZ, log.getZ());
+            maxZ = Math.max(maxZ, log.getZ());
+            logsPerLayer.merge(log.getY(), 1, Integer::sum);
+        }
+        int height = maxY - minY + 1;
+        int maxHorizontal = Math.max(maxX - minX + 1, maxZ - minZ + 1);
+        int maxLogsPerLayer = logsPerLayer.values().stream().max(Integer::compareTo).orElse(0);
+
+        // 判据 2：平铺墙/地板。
+        if (maxLogsPerLayer > MAX_LOGS_PER_LAYER) {
+            return Optional.empty();
+        }
+        // 判据 3：矮而宽。
+        if (height <= 2 && maxHorizontal >= WIDE_SHORT_MIN_HORIZONTAL) {
+            return Optional.empty();
+        }
+
+        // 判据 1：自然叶包围（统计不重复自然叶，够 MIN_TREE_LEAVES 即通过）。
+        int naturalLeaves = countNaturalLeaves(world, logs);
+        if (naturalLeaves < MIN_TREE_LEAVES) {
+            return Optional.empty();
+        }
+
+        return Optional.of(new TreePlan.Evidence(
+                logs.size(), naturalLeaves, maxLogsPerLayer, height, maxHorizontal));
+    }
+
+    /**
+     * 统计簇周围不重复的自然树叶数量（围绕每块原木做 {@link #LEAF_SEARCH_RADIUS} 半径盒搜索）。
+     * 用不重复集合防止同一块紧邻多块原木的树叶被重复计数。
+     */
+    private static int countNaturalLeaves(World world, List<BlockPos> logs) {
         Set<Long> countedLeaves = new HashSet<>();
 
         BlockPos.Mutable cursor = new BlockPos.Mutable();
@@ -227,24 +314,20 @@ public final class TreeDetector {
                         if (countedLeaves.contains(key)) {
                             continue;
                         }
-
                         if (isNaturalLeaf(world.getBlockState(cursor))) {
                             countedLeaves.add(key);
-                            if (countedLeaves.size() >= MIN_TREE_LEAVES) {
-                                // 提前退出：已经凑够判定所需的数量了。
-                                return true;
-                            }
                         }
                     }
                 }
             }
         }
-
-        return false;
+        return countedLeaves.size();
     }
 
     /**
-     * 仅对<em>自然生长</em>的树叶返回 true。玩家放置的树叶其 {@code PERSISTENT = true}
+     * 仅对<em>自然生长</em>的树
+     *
+     * 叶返回 true。玩家放置的树叶其 {@code PERSISTENT = true}
      * （永不衰减）；树木自然长出的树叶其 {@code PERSISTENT = false}。要求「非持久化」的树叶，
      * 正是我们区分真实树木与玩家用原木+树叶搭建的装饰物的依据。
      */

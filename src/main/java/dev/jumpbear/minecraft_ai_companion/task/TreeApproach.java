@@ -12,7 +12,6 @@ import net.minecraft.world.World;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Optional;
 
 /**
  * 为「够到某个底部原木（通常是 base）」挑选一个合格的<b>落脚站格</b>，并顺带记录为此需要先清掉的
@@ -65,14 +64,17 @@ public final class TreeApproach {
     }
 
     /**
-     * 为够到 {@code target} 挑一个落脚方案。
+     * 为够到 {@code target} 挑出<b>全部合格落脚方案，按择优顺序排序</b>。返回列表而非单个最优，是为了让
+     * 执行方（{@link FellNaturalTreeTask}）能<b>逐候选尝试</b>：导航到候选 A 失败（无路径/STUCK）或到达后
+     * 实时门控不通过时，直接换下一候选，而不是苛求单一「理论最优点」必达。列表已按择优键排序，调用方
+     * 从前往后试即可；耗尽整列表仍不成即该目标失败。
      *
      * @param player 同伴（用于世界、眼高、交互距离等 vanilla 度量）
      * @param tree   已识别的树（用于「这片叶属不属于本树」的判定）
      * @param target 要够到的底部原木（通常是 base）
-     * @return 合格落脚方案；渐进扩张到最大半径仍无合格候选则返回空（应跳过该树）
+     * @return 合格落脚方案，按择优排序（可能为空——渐进扩张到最大半径仍无合格候选，应跳过该目标）
      */
-    public static Optional<Approach> plan(ServerPlayerEntity player, TreeDetector.Tree tree, BlockPos target) {
+    public static List<Approach> plan(ServerPlayerEntity player, TreeDetector.Tree tree, BlockPos target) {
         World world = player.getEntityWorld();
         double eyeHeight = player.getStandingEyeHeight();
         double reach = player.getBlockInteractionRange() + 1.0D;
@@ -116,10 +118,10 @@ public final class TreeApproach {
                         .thenComparingDouble(a -> a.foothold().getSquaredDistance(target))
                         // 6) 确定性兜底
                         .thenComparingLong(a -> a.foothold().asLong()));
-                return Optional.of(candidates.get(0));
+                return candidates;
             }
         }
-        return Optional.empty();
+        return List.of();
     }
 
     /**
@@ -156,10 +158,12 @@ public final class TreeApproach {
      * 而漏检——一片本该记入待清的挡视线叶被跳过，规划判「视线通」，执行期却被它挡住（CHOP FAIL）。DDA
      * 逐边界步进，数学上保证不漏任何被线段穿过的格。
      *
-     * <p>与挖掘门控 {@link TreeChopSight#hasLineOfSight} 现在共用同一套视线模型——「从眼睛沿直线到目标
-     * 中心，满碰撞方块挡断视线，本树叶视作可清除而穿过」——只是门控用 vanilla {@code world.raycast}
-     * （执行期权威判据），本方法用无盲区的 DDA（规划期）。二者过去因「规划用理想眼位、执行用漂移后实际
-     * 眼位」而分歧，已由 ALIGN 阶段把身体对齐到落脚格中心消除。
+     * <p><b>这是规划期的「提示」，不是执行期权威判据。</b>规划用<em>碰撞形状</em> DDA 逐格判：满碰撞方块
+     * 挡断、本树叶视作可清除而穿过、无碰撞方块（短草/花/藤蔓等）当作透明。真正决定「能不能挖」的是执行期
+     * {@link TreeChopStep}——它从<b>实际站位</b>用 OUTLINE 射线、且向目标中心 + 六个面<b>多瞄点</b>验证
+     * （任一命中即可挖）。两者语义有意不同：规划只需据碰撞几何粗筛出「站得上、够得到、大致看得见」的候选，
+     * 执行再以实时多瞄点定夺；因此规划把短草当透明、执行也能从某个面绕过它，二者对候选是否可用的结论一致。
+     * 切勿据本方法的单线段结果推断执行期行为。
      *
      * <ul>
      *   <li>命中目标格 → 视线通，返回沿途收集到的<b>全部</b>本树待清叶（可能为空）。</li>

@@ -9,6 +9,7 @@ import dev.jumpbear.minecraft_ai_companion.task.CollectDroppedItemsTask;
 import dev.jumpbear.minecraft_ai_companion.task.CompanionHotbar;
 import dev.jumpbear.minecraft_ai_companion.task.CompanionTask;
 import dev.jumpbear.minecraft_ai_companion.task.CompanionTaskManager;
+import dev.jumpbear.minecraft_ai_companion.task.FellNaturalTreeTask;
 import dev.jumpbear.minecraft_ai_companion.task.FollowPlayerTask;
 import dev.jumpbear.minecraft_ai_companion.task.PillarTestTask;
 import dev.jumpbear.minecraft_ai_companion.task.ReachAndChopTask;
@@ -207,6 +208,18 @@ public final class CompanionDebugCommands {
                         .executes(CompanionDebugCommands::setupTreeStep))
                 .then(CommandManager.literal("setup_tree_grass")
                         .executes(CompanionDebugCommands::setupTreeGrass))
+                .then(CommandManager.literal("setup_tree_branchy")
+                        .executes(CompanionDebugCommands::setupTreeBranchy))
+                .then(CommandManager.literal("setup_tree_darkoak")
+                        .executes(CompanionDebugCommands::setupTreeDarkOak))
+                .then(CommandManager.literal("setup_tree_adjacent")
+                        .executes(CompanionDebugCommands::setupTreeAdjacent))
+                .then(CommandManager.literal("setup_tree_building")
+                        .executes(CompanionDebugCommands::setupTreeBuilding))
+                .then(CommandManager.literal("setup_tree_short")
+                        .executes(CompanionDebugCommands::setupTreeShort))
+                .then(CommandManager.literal("setup_tree_cliff")
+                        .executes(CompanionDebugCommands::setupTreeCliff))
                 .then(CommandManager.literal("los_test")
                         .executes(CompanionDebugCommands::losTest))
                 .then(CommandManager.literal("tree_plan_show")
@@ -236,6 +249,8 @@ public final class CompanionDebugCommands {
                                 .executes(CompanionDebugCommands::taskReachTree))
                         .then(CommandManager.literal("chop_base")
                                 .executes(CompanionDebugCommands::taskChopBase))
+                        .then(CommandManager.literal("fell_tree")
+                                .executes(CompanionDebugCommands::taskFellTree))
                         .then(CommandManager.literal("current")
                                 .executes(CompanionDebugCommands::taskCurrent))
                         .then(CommandManager.literal("status")
@@ -243,7 +258,12 @@ public final class CompanionDebugCommands {
                         .then(CommandManager.literal("cancel")
                                 .executes(CompanionDebugCommands::taskCancel)))
                 .then(CommandManager.literal("remove")
-                        .executes(CompanionDebugCommands::remove)));
+                        .executes(CompanionDebugCommands::remove))
+                .then(CommandManager.literal("wander")
+                        .then(CommandManager.literal("on")
+                                .executes(ctx -> setWander(ctx, true)))
+                        .then(CommandManager.literal("off")
+                                .executes(ctx -> setWander(ctx, false)))));
     }
 
     private static int spawn(CommandContext<ServerCommandSource> context) {
@@ -356,9 +376,38 @@ public final class CompanionDebugCommands {
 
         ServerPlayerEntity player = companion.get();
         player.giveItemStack(new ItemStack(Items.IRON_AXE));
-        CompanionTaskManager.assign(player, new ReachAndChopTask());
+        CompanionTaskManager.assign(player, new ReachAndChopTask(source));
         source.sendFeedback(() -> Text.literal("Task assigned: ReachAndChop (gave 1 iron axe; walks to base, "
-                + "clears leaves, switches to axe, chops base + block above)"), true);
+                + "clears leaves, switches to axe, chops base + block above; diagnostics to you only)"), true);
+        return 1;
+    }
+
+    /**
+     * 正式整树砍伐：塞一把铁斧（供「挖前换最快工具」用），指派 {@link FellNaturalTreeTask} 砍倒最近一棵
+     * 可确认归属、可安全到达的自然树，并<b>成功后</b>排队 {@link CollectDroppedItemsTask} 收集木材
+     * （{@code enqueueOnSuccess}：砍树失败则不收集、失败状态可见）。诊断仅命令发起者可见。
+     */
+    private static int taskFellTree(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        Optional<ServerPlayerEntity> companion = requireCompanion(source);
+        if (companion.isEmpty()) {
+            return 0;
+        }
+
+        ServerPlayerEntity player = companion.get();
+        player.giveItemStack(new ItemStack(Items.IRON_AXE));
+        CompanionTaskManager.assign(player, new FellNaturalTreeTask(source));
+        CompanionTaskManager.enqueueOnSuccess(player, new CollectDroppedItemsTask(player));
+        source.sendFeedback(() -> Text.literal("Task assigned: FellNaturalTree (gave 1 iron axe; fells the "
+                + "nearest owned+reachable natural tree per-log, then collects wood on success; "
+                + "diagnostics to you only)"), true);
+        return 1;
+    }
+
+    /** 开/关闲逛（生命系统 WANDER）。测试期用 {@code off} 让同伴原地不动，测完 {@code on} 恢复。 */
+    private static int setWander(CommandContext<ServerCommandSource> context, boolean enabled) {
+        CompanionLifeSystem.setWanderEnabled(enabled);
+        context.getSource().sendFeedback(() -> Text.literal("Companion wander " + (enabled ? "ENABLED" : "DISABLED")), true);
         return 1;
     }
 
@@ -1460,19 +1509,23 @@ public final class CompanionDebugCommands {
     }
 
     /**
-     * 视线门控（委托给 {@link TreeChopSight}，与实际砍树任务共用同一实现，单一事实来源）：同伴当前能否
-     * 「看见并够得着」目标方块。度量对齐 vanilla：距离用 {@code canInteractWithBlockAt(target, 1.0)}；视线用
-     * 眼睛→目标中心的<b>线段</b>射线（不依赖朝向，避免「发包设朝向同 tick 读不到」的时序坑）。
+     * 视线门控自检（委托给 {@link TreeChopSight}，<b>单条中心射线</b>）：同伴当前能否「看见并够得着」目标。
+     * 度量对齐 vanilla：距离用 {@code canInteractWithBlockAt(target, 1.0)}；视线用眼睛→目标中心的<b>单条线段</b>
+     * 射线（不依赖朝向）。
      *
-     * @return true 表示够得着且视线通（命中的正是目标）；false 表示够不着或被别的方块挡住——都不应挖。
+     * <p><b>注意：这不是实际砍树的线上判据。</b>实际砍树走 {@link dev.jumpbear.minecraft_ai_companion.task.TreeChopStep}
+     * 的<b>多瞄点</b>验证（中心 + 六面，任一命中即可挖），以绕过短草等无碰撞却有轮廓的方块。本函数与
+     * {@code los_test} 仅作单射线视线判据的独立自检，用满碰撞遮挡（泥土）时两套判据结论一致。
+     *
+     * @return true 表示够得着且中心射线通；false 表示够不着或中心线被挡。
      */
     private static boolean hasLineOfSight(ServerPlayerEntity player, BlockPos target) {
         return TreeChopSight.hasLineOfSight(player, target);
     }
 
     /**
-     * 视线门控自检测试台（一条命令、同步自我验证）：在同伴正前方 2 格放金块（目标）、正前方 1 格（正好
-     * 挡在眼睛→目标直线上）放泥土（遮挡），然后用<b>与实际砍伐同一个</b> {@link #hasLineOfSight} 函数测两次：
+     * 单射线视线判据自检测试台（一条命令、同步自我验证）：在同伴正前方 2 格放金块（目标）、正前方 1 格（正好
+     * 挡在眼睛→目标直线上）放泥土（<b>满碰撞</b>遮挡），然后用 {@link #hasLineOfSight} 测两次：
      * <ul>
      *   <li>A 阶段（有遮挡）：门控应判 <b>false</b>（射线命中泥土，看不见目标）——这正是隔墙挖 bug 场景，
      *       必须被拦下。</li>
@@ -1539,14 +1592,16 @@ public final class CompanionDebugCommands {
         }
 
         TreeDetector.Tree t = tree.get();
-        Optional<TreeApproach.Approach> approach = TreeApproach.plan(player, t, t.base());
-        if (approach.isEmpty()) {
+        List<TreeApproach.Approach> approaches = TreeApproach.plan(player, t, t.base());
+        if (approaches.isEmpty()) {
             source.sendFeedback(() -> Text.literal("Tree plan: base=" + t.base().toShortString()
                     + " -> NO foothold within radius; SKIP this tree"), true);
             return 0;
         }
 
-        TreeApproach.Approach a = approach.get();
+        // 展示择优第一候选（列表已按择优排序）；其余候选是执行期不可达时的回退。
+        TreeApproach.Approach a = approaches.get(0);
+        int candidateCount = approaches.size();
         ServerWorld world = (ServerWorld) player.getEntityWorld();
         // 待清遮挡叶 → 钻石块（醒目，便于在树叶堆里看清标记）。
         for (BlockPos occ : a.occluders()) {
@@ -1559,7 +1614,8 @@ public final class CompanionDebugCommands {
                 + " foothold=" + a.foothold().toShortString()
                 + " radius=" + a.radius()
                 + " occluders=" + a.occluders().size()
-                + " (emerald=foothold, diamond=leaves to clear)"), true);
+                + " candidates=" + candidateCount
+                + " (emerald=best foothold, diamond=leaves to clear)"), true);
         return 1;
     }
 
@@ -1640,6 +1696,62 @@ public final class CompanionDebugCommands {
         }
     }
 
+    /** 一片自然（persistent=false、distance=1）橡木叶方块状态，供各场景铺树冠/包裹用。 */
+    private static BlockState naturalOakLeaf() {
+        return Blocks.OAK_LEAVES.getDefaultState()
+                .with(net.minecraft.block.LeavesBlock.PERSISTENT, false)
+                .with(net.minecraft.block.LeavesBlock.DISTANCE, 1);
+    }
+
+    /** 在以 center 为中心的 (2*r+1)³ 盒内，把空气格铺成自然橡木叶（不覆盖已有方块，如树干）。 */
+    private static void fillNaturalLeaves(ServerWorld world, BlockPos center, int r) {
+        BlockState leaf = naturalOakLeaf();
+        for (int dx = -r; dx <= r; dx++) {
+            for (int dy = -r; dy <= r; dy++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    BlockPos p = center.add(dx, dy, dz);
+                    if (world.getBlockState(p).isAir()) {
+                        world.setBlockState(p, leaf);
+                    }
+                }
+            }
+        }
+    }
+
+    /** 分支树：主干 + 若干侧向分叉原木（每根分叉尽头补一坨叶）。用于验证列排序与分叉列逐个重规划。 */
+    private static void plantBranchyTree(ServerWorld world, BlockPos base, int trunk, Direction right) {
+        plantOakTree(world, base, trunk);
+        // 两根侧向分叉：从主干中上部各向 right / -right 伸出 1 格原木，尽头补叶。
+        Direction[] dirs = {right, right.getOpposite()};
+        int[] heights = {trunk - 2, trunk - 3};
+        for (int i = 0; i < dirs.length; i++) {
+            int h = Math.max(1, heights[i]);
+            BlockPos branch = base.up(h).offset(dirs[i]);
+            world.setBlockState(branch, Blocks.OAK_LOG.getDefaultState());
+            fillNaturalLeaves(world, branch, 1);
+        }
+    }
+
+    /** 深色橡木风格 2×2 粗主干（用 dark_oak_log），顶部铺自然橡木叶。验证多主干与邻近原木挡多瞄点的处理。 */
+    private static void plantDarkOakTree(ServerWorld world, BlockPos base, int trunk, Direction right) {
+        Direction fwd = right.rotateYCounterclockwise();
+        BlockPos[] corners = {
+                base,
+                base.offset(right),
+                base.offset(fwd),
+                base.offset(right).offset(fwd),
+        };
+        for (BlockPos corner : corners) {
+            for (int i = 0; i < trunk; i++) {
+                world.setBlockState(corner.up(i), Blocks.DARK_OAK_LOG.getDefaultState());
+            }
+        }
+        // 树冠：在 2×2 顶部的几何中心（四角中点上方）铺一坨自然叶，半径 2 足以裹住四根柱顶。
+        BlockPos crownCenter = base.offset(right).offset(fwd).up(trunk);
+        fillNaturalLeaves(world, crownCenter, 2);
+    }
+
+
     /** 清场：只清出一块 21×21、高 12 的干净石地空场，不放树。用于手动摆树或反复复位场地。 */
     private static int setupTreeClear(CommandContext<ServerCommandSource> context) {
         ServerCommandSource source = context.getSource();
@@ -1647,7 +1759,7 @@ public final class CompanionDebugCommands {
         BlockPos origin = testOrigin(source);
         clearArena(world, origin, 10, 12);
         source.sendFeedback(() -> Text.literal("Tree test: cleared 21x21 arena (stone floor) at "
-                + origin.toShortString() + ", h=12. Place a tree, then /aicompanion spawn + task chop_base."), true);
+                + origin.toShortString() + ", h=12. Place a tree, then /aicompanion spawn + task fell_tree."), true);
         return 1;
     }
 
@@ -1661,7 +1773,7 @@ public final class CompanionDebugCommands {
         BlockPos base = origin.offset(facing, 3);
         plantOakTree(world, base, 4);
         source.sendFeedback(() -> Text.literal("Tree test STANDARD: cleared arena + 4-log oak at base "
-                + base.toShortString() + " (3 blocks " + facing + "). spawn + task chop_base."), true);
+                + base.toShortString() + " (3 blocks " + facing + "). spawn + task fell_tree."), true);
         return 1;
     }
 
@@ -1691,7 +1803,7 @@ public final class CompanionDebugCommands {
         plantOakTree(world, base, 4);
         source.sendFeedback(() -> Text.literal("Tree test STEP: 1-block step (high side " + facing
                 + " 2..5), tree on high edge, base " + base.toShortString()
-                + ". Reproduces the wedge bug. spawn + task chop_base."), true);
+                + ". Reproduces the wedge bug. spawn + task fell_tree."), true);
         return 1;
     }
 
@@ -1715,9 +1827,141 @@ public final class CompanionDebugCommands {
             }
         }
         source.sendFeedback(() -> Text.literal("Tree test GRASS: standard tree + short_grass ring around base "
-                + base.toShortString() + " (tests DDA/gate shape divergence). spawn + task chop_base."), true);
+                + base.toShortString() + " (tests DDA/gate shape divergence). spawn + task fell_tree."), true);
         return 1;
     }
+
+    /** 分支树场景：清场 + 主干 + 两根侧向分叉原木。验证列排序与分叉列逐个可达性重规划。 */
+    private static int setupTreeBranchy(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        ServerWorld world = source.getWorld();
+        BlockPos origin = testOrigin(source);
+        clearArena(world, origin, 10, 12);
+        Direction facing = source.getEntity() instanceof ServerPlayerEntity p ? p.getHorizontalFacing() : Direction.NORTH;
+        BlockPos base = origin.offset(facing, 3);
+        plantBranchyTree(world, base, 5, facing.rotateYClockwise());
+        source.sendFeedback(() -> Text.literal("Tree test BRANCHY: 5-log trunk + 2 side branches at base "
+                + base.toShortString() + ". spawn + task fell_tree (watch column order + branch relocation)."), true);
+        return 1;
+    }
+
+    /** 深色橡木场景：清场 + 2×2 粗主干（dark_oak_log）。验证多主干逐块流程与「邻近原木挡多瞄点面」隐患。 */
+    private static int setupTreeDarkOak(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        ServerWorld world = source.getWorld();
+        BlockPos origin = testOrigin(source);
+        clearArena(world, origin, 10, 12);
+        Direction facing = source.getEntity() instanceof ServerPlayerEntity p ? p.getHorizontalFacing() : Direction.NORTH;
+        BlockPos base = origin.offset(facing, 3);
+        plantDarkOakTree(world, base, 5, facing.rotateYClockwise());
+        source.sendFeedback(() -> Text.literal("Tree test DARK_OAK: 2x2 trunk (5 tall) at base "
+                + base.toShortString() + ". spawn + task fell_tree (watch for blocked-by-foreign from adjacent trunk logs)."), true);
+        return 1;
+    }
+
+    /** 相邻树场景：清场 + 两棵标准树相隔 2 格（对角不接触）。验证 26 邻接不误并、base 取最近。 */
+    private static int setupTreeAdjacent(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        ServerWorld world = source.getWorld();
+        BlockPos origin = testOrigin(source);
+        clearArena(world, origin, 10, 12);
+        Direction facing = source.getEntity() instanceof ServerPlayerEntity p ? p.getHorizontalFacing() : Direction.NORTH;
+        Direction right = facing.rotateYClockwise();
+        BlockPos baseA = origin.offset(facing, 3).offset(right, -2);
+        BlockPos baseB = origin.offset(facing, 3).offset(right, 2);
+        plantOakTree(world, baseA, 4);
+        plantOakTree(world, baseB, 4);
+        source.sendFeedback(() -> Text.literal("Tree test ADJACENT: two 4-log oaks at " + baseA.toShortString()
+                + " and " + baseB.toShortString() + " (4 blocks apart). spawn + task fell_tree "
+                + "(should fell ONE tree, not merge both)."), true);
+        return 1;
+    }
+
+    /**
+     * 树旁建筑场景：清场 + 标准树，再在树旁 2 格用<b>持久化</b>橡木叶+原木搭一小段墙（玩家建筑特征）。
+     * 验证保守形状校验/归属判定不把建筑并入、不误砍。预期：只砍那棵真树，墙保留。
+     */
+    private static int setupTreeBuilding(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        ServerWorld world = source.getWorld();
+        BlockPos origin = testOrigin(source);
+        clearArena(world, origin, 10, 12);
+        Direction facing = source.getEntity() instanceof ServerPlayerEntity p ? p.getHorizontalFacing() : Direction.NORTH;
+        Direction right = facing.rotateYClockwise();
+        BlockPos base = origin.offset(facing, 3).offset(right, -2);
+        plantOakTree(world, base, 4);
+        // 建筑：真树右侧 3 格起，一段 3 长的原木墙（2 高），无自然叶——玩家结构。
+        BlockState wallLog = Blocks.OAK_LOG.getDefaultState();
+        for (int s = 0; s < 3; s++) {
+            BlockPos col = origin.offset(facing, 3).offset(right, 2 + s);
+            world.setBlockState(col, wallLog);
+            world.setBlockState(col.up(), wallLog);
+        }
+        source.sendFeedback(() -> Text.literal("Tree test BUILDING: real oak at " + base.toShortString()
+                + " + a 3x2 log wall to the side (no natural leaves). spawn + task fell_tree "
+                + "(should fell the tree, NOT the wall)."), true);
+        return 1;
+    }
+
+    /**
+     * 矮树场景（已知失败源）：清场 + 2 段矮树干，用半径 3 的<b>贴地大树冠</b>把树干整个埋进去。矮树树冠贴地、
+     * 树叶有完整碰撞体，会侵占到落脚候选区（base 周围半径 3-4），villager 代理寻路被树叶墙挡在外面、
+     * 到不了 base 旁。验证任务<b>诚实报 FAILURE</b>（no-path/stuck）而非硬挤/挂起。
+     *
+     * <p>注：若同伴仍从某个缝隙够到并砍倒，也是可接受的更优结果——本场景只保证不挂起、不硬挤，
+     * 砍成功或干净失败都算通过。
+     */
+    private static int setupTreeShort(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        ServerWorld world = source.getWorld();
+        BlockPos origin = testOrigin(source);
+        clearArena(world, origin, 10, 12);
+        Direction facing = source.getEntity() instanceof ServerPlayerEntity p ? p.getHorizontalFacing() : Direction.NORTH;
+        BlockPos base = origin.offset(facing, 3);
+        // 2 段矮树干。
+        world.setBlockState(base, Blocks.OAK_LOG.getDefaultState());
+        world.setBlockState(base.up(), Blocks.OAK_LOG.getDefaultState());
+        // 贴地大树冠：以树干中点为中心半径 3 铺自然叶（7×7×7 减去树干），把 base 埋在叶墙里，
+        // 使 base 周围落脚候选区被有碰撞的树叶占满，复现矮树寻路受阻。
+        fillNaturalLeaves(world, base.up(), 3);
+        source.sendFeedback(() -> Text.literal("Tree test SHORT: 2-log stump buried in a radius-3 ground-hugging "
+                + "leaf ball at " + base.toShortString() + ". spawn + task fell_tree "
+                + "(expect clean FAILURE: proxy walled out by leaves — or a clean success if it finds a gap)."), true);
+        return 1;
+    }
+
+    /**
+     * 悬崖场景：清场 + 标准树，再在 base 朝 facing 一侧挖一道 <b>4 格深</b>、3 格宽的坑（悬崖立面）。
+     * 4 格深超过 villager 代理寻路的坠落容忍（3 格），使坑成为真正的不可越障：验证同伴<b>不下坑</b>——
+     * 要么从其它安全面绕行接近并砍，要么在无其它路径时诚实报 no-path，而<b>不</b>直接跳进坑。
+     * （3 格深会被寻路当作可接受坠落而走下去，测不出避让，故用 4 格。）
+     */
+    private static int setupTreeCliff(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        ServerWorld world = source.getWorld();
+        BlockPos origin = testOrigin(source);
+        clearArena(world, origin, 10, 12);
+        Direction facing = source.getEntity() instanceof ServerPlayerEntity p ? p.getHorizontalFacing() : Direction.NORTH;
+        Direction right = facing.rotateYClockwise();
+        BlockPos base = origin.offset(facing, 3);
+        plantOakTree(world, base, 4);
+        // 在 base 与玩家之间（facing 反向 1..2 格）挖 4 格深坑（清 base.y+1 下探到 base.y-4），形成悬崖立面。
+        BlockPos.Mutable c = new BlockPos.Mutable();
+        for (int f = 1; f <= 2; f++) {
+            for (int s = -1; s <= 1; s++) {
+                BlockPos col = base.offset(facing.getOpposite(), f).offset(right, s);
+                for (int dy = -1; dy <= 4; dy++) {
+                    c.set(col.getX(), col.getY() - dy, col.getZ());
+                    world.setBlockState(c, Blocks.AIR.getDefaultState());
+                }
+            }
+        }
+        source.sendFeedback(() -> Text.literal("Tree test CLIFF: standard tree at " + base.toShortString()
+                + " + a 4-deep pit between you and it. spawn + task fell_tree "
+                + "(companion must NOT dive into the pit; goes around or fails cleanly)."), true);
+        return 1;
+    }
+
 
     private static int placeFrontDebug(CommandContext<ServerCommandSource> context) {
         ServerCommandSource source = context.getSource();

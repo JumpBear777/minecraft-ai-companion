@@ -643,6 +643,74 @@ available. Its lumberjack chain (`EntityAIWorkLumberjack`/`Tree`/`PathJobFindTre
 is a useful design reference for the redo — note it fells top-down whereas our body is a real player
 with ~4.5-block reach, so the redo will need its own reach strategy (pillar up, or fell bottom-up).
 
+## 7.6 Chop-tree redo — FellNaturalTreeTask (2026-07-13)
+
+Woodcutting rebuilt as a real behavior task, `FellNaturalTreeTask`, replacing the debug-only minimal
+loop. Borrows only Numen's *decision model* (frozen target set + isolate-the-unreachable + real-time
+interaction validation); the implementation is composed entirely from this project's already-validated
+adapters (`CompanionNavigator`, `CompanionMiningTasks`, `CompanionHotbar`, and — stage 2 — `CompanionPillar`).
+
+### Behavior contract (stage 1)
+- **Success**: every log in the frozen `TreePlan` snapshot is confirmed air.
+- **Failure**: any planned log remaining ⇒ overall `FAILURE`; each residual log's reason is recorded
+  (`no-foothold` / `no-path` / `out-of-sight` / `out-of-reach` / `blocked-by-foreign` / `mining-failed`
+  / `nav-timeout`). Judged from the **actual world state**, not from an internal "I think I broke it".
+- **Ambiguous ownership ⇒ refuse**: `TreeDetector`'s conservative shape validation rejects the cluster,
+  and the task fails at `start` — it never guesses.
+- **Collection is separate**: the task only fells. Wood pickup is a follow-up via
+  `enqueueOnSuccess(CollectDroppedItemsTask)`, so a failed chop is never masked by an empty collect pass.
+- **Does NOT promise** (stage 1): auto-bridging, tunneling, or "dig any obstacle". Out of reach ⇒ honest failure.
+- **Known residual risk (accepted, not fixed)**: ownership is heuristic; a player's log structure built
+  within 2 blocks of a real tree can borrow its natural leaves and be accepted (low probability).
+
+### Structure captured once, execution consumes it
+`TreePlan` (new, immutable) is frozen at `start` from a `TreeDetector.Tree`: ordered logs
+(`TreeStructure.ordered`) + the allowed-to-clear own-leaf set (packed `asLong` keys, single source of
+truth for leaf ownership, Chebyshev ≤ 2 of some log). Execution reads only the snapshot; leaf decay or
+another entity's edits can never change the target/ownership set mid-run.
+
+### Per-log reachability re-planning
+For each log in order: try `TreeChopStep` from the **current position** first (may already be in reach,
+saving a navigation); if not, take that log's sorted `TreeApproach` footholds and try each via
+`CompanionNavigator` — `pathTo`==false or `NO_PATH`/`STUCK`/`IDLE` ⇒ next candidate immediately (a
+consumed candidate is never retried, so no A→B→A loop); only `ARRIVED` counts as in position. Candidates
+exhausted ⇒ record the log's reason and **continue to the next log** (the rest of the tree may still be
+reachable). No in-task `applyServerTravelForward`; all movement goes through `CompanionNavigator`.
+
+### One shared judgment model — `TreeChopStep`
+Both `FellNaturalTreeTask` and the downgraded debug `ReachAndChopTask` drive a `TreeChopStep`, so the
+"can I mine it / is an own-leaf in the way / is a foreign block in the way" decision lives in exactly
+one place (the archived module's recurring bug was planning and execution using two different sight
+algorithms). Every decision uses the **live eye position** + vanilla `canInteractWithBlockAt` +
+`world.raycast(OUTLINE)`. This structurally dissolves the old plan-vs-execute occluder-shape divergence:
+`TreeApproach`'s DDA is only a *hint*; the executor's real ray is authoritative. Reactive leaf clearing
+is **own-tree-only and bounded** (≤ 6 leaves/target); a ray hitting anything not owned ⇒
+`BLOCKED_BY_FOREIGN` and the caller relocates — it never digs a block it does not own.
+
+### TreeDetector — conservative shape validation (26-neighbor floodfill kept)
+26-neighbor floodfill retained (keeps natural diagonal branches together). Post-cluster rejection added:
+a single Y layer with > 9 logs (wall/floor), a height ≤ 2 cluster spread ≥ 3 horizontally (log
+row/floor), or a cluster hitting `MAX_TREE_LOGS`(128) — the whole tree is rejected (never partially
+felled). Acceptance now returns `TreePlan.Evidence` (log count, natural leaves, densest layer, height,
+horizontal span) for diagnostics and repeatable test assertions.
+
+### Cleanups (regressions that had reached main)
+- Removed the `[ChopDebug]` **server-wide broadcast** — diagnostics now go only to the command source
+  (`ReachAndChopTask`/`FellNaturalTreeTask` take an optional `ServerCommandSource` sink).
+- Restored idle **WANDER** (had been commented out for testing and committed) behind a runtime toggle:
+  `/aicompanion wander on|off` (default on).
+
+### Debug commands
+- `/aicompanion task fell_tree` — give iron axe, `assign(FellNaturalTreeTask)` + `enqueueOnSuccess(collect)`.
+- `/aicompanion task chop_base` — unchanged name, now the narrow 2-block regression driver.
+- `/aicompanion wander on|off` — idle-wander toggle.
+- `/aicompanion tree_plan_show` — now reports the best of N sorted foothold candidates.
+
+### Scope / next
+Stage 1 = ground-reachable per-log felling (normal / branchy / multi-trunk). **Stage 2 (not built)**:
+compose `CompanionPillar` for trunk logs above interaction height, only when necessary and safe. Build
+passes; **not yet validated in-world** — needs the §Verification matrix run.
+
 ## 8. First MVP
 
 The first playable milestone is not chatting.
