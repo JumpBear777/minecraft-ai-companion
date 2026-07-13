@@ -106,19 +106,34 @@ public final class TreeDetector {
      * @return 最近的自然树；若范围内没有则返回空。
      */
     public static Optional<Tree> findNearestTree(ServerPlayerEntity companion) {
+        return findNearestTree(companion, SEARCH_HORIZONTAL, Set.of());
+    }
+
+    /**
+     * 与 {@link #findNearestTree(ServerPlayerEntity)} 相同，但用<b>自定义水平半径</b>扫描，并可传入一组
+     * <b>预先否决的原木坐标</b>（{@code avoidLogs}，打包 {@link BlockPos#asLong()}）。用于「漫游侦察」：
+     * 正常砍伐半径内没树时，用更大的半径找远处的树；对已经确认走不到的树，把它的原木传进 {@code avoidLogs}
+     * 以便本方法跳过它、返回<em>下一近</em>的候选，而不是每次都返回同一棵够不到的树。
+     *
+     * @param horizontalRadius 种子搜索盒的水平半径（每个水平轴各延伸这么远）
+     * @param avoidLogs        预先视为「已否决」的原木坐标（asLong 打包）；这些位置永不被选作种子
+     */
+    public static Optional<Tree> findNearestTree(ServerPlayerEntity companion, int horizontalRadius,
+                                                 Set<Long> avoidLogs) {
         if (!(companion.getEntityWorld() instanceof ServerWorld world)) {
             return Optional.empty();
         }
 
         // 已被证实属于被否决（非自然）簇的原木。传入种子搜索，使我们永远不会再从一个已排除的
         // 方块重新播种——这正是阻断「找到种子 -> 否决簇 -> 又找到同一个种子」死循环的关键。
-        // 用 BlockPos.asLong() 打包，便于低成本地做成员判断。
-        Set<Long> rejected = new HashSet<>();
+        // 用 BlockPos.asLong() 打包，便于低成本地做成员判断。调用方传入的 avoidLogs 作为初始否决集
+        // （漫游侦察用来跳过已确认走不到的树）。
+        Set<Long> rejected = new HashSet<>(avoidLogs);
 
         while (true) {
             // 取这一轮的「种子」：搜索盒内离同伴最近、且尚未被否决的一块原木。
             // 之后会从它洪水填充出整簇原木。
-            BlockPos seed = findNearestSeedLog(companion, world, rejected);
+            BlockPos seed = findNearestSeedLog(companion, world, rejected, horizontalRadius);
             if (seed == null) {
                 // 返回 null 表示搜索盒已扫遍、再没有任何未被否决的原木——要么附近本就没有原木，
                 // 要么附近的原木簇都已在前几轮被判定为非自然树而进了 rejected。两种情况结论一致：
@@ -159,15 +174,16 @@ public final class TreeDetector {
      * 扫描同伴周围的搜索盒，返回离同伴脚下最近的原木方块，跳过 {@code rejected} 中的位置。
      * 若找不到符合条件的原木则返回 {@code null}。
      */
-    private static BlockPos findNearestSeedLog(ServerPlayerEntity companion, World world, Set<Long> rejected) {
+    private static BlockPos findNearestSeedLog(ServerPlayerEntity companion, World world, Set<Long> rejected,
+                                               int horizontalRadius) {
         BlockPos origin = companion.getBlockPos();
         BlockPos nearest = null;
         double nearestSq = Double.MAX_VALUE;
 
         // 用可变游标避免为每个被扫描的格子分配一个 BlockPos。
         BlockPos.Mutable cursor = new BlockPos.Mutable();
-        for (int dx = -SEARCH_HORIZONTAL; dx <= SEARCH_HORIZONTAL; dx++) {
-            for (int dz = -SEARCH_HORIZONTAL; dz <= SEARCH_HORIZONTAL; dz++) {
+        for (int dx = -horizontalRadius; dx <= horizontalRadius; dx++) {
+            for (int dz = -horizontalRadius; dz <= horizontalRadius; dz++) {
                 for (int dy = -SEARCH_DOWN; dy <= SEARCH_UP; dy++) {
                     cursor.set(origin.getX() + dx, origin.getY() + dy, origin.getZ() + dz);
                     if (rejected.contains(cursor.asLong()) || !isLog(world, cursor)) {
@@ -326,6 +342,8 @@ public final class TreeDetector {
 
     /**
      * 仅对<em>自然生长</em>的树
+     *
+     *
      *
      * 叶返回 true。玩家放置的树叶其 {@code PERSISTENT = true}
      * （永不衰减）；树木自然长出的树叶其 {@code PERSISTENT = false}。要求「非持久化」的树叶，

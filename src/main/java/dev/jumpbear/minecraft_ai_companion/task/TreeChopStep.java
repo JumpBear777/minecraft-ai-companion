@@ -3,6 +3,7 @@ package dev.jumpbear.minecraft_ai_companion.task;
 import dev.jumpbear.minecraft_ai_companion.CompanionInputController;
 import dev.jumpbear.minecraft_ai_companion.CompanionMiningTasks;
 import net.minecraft.block.BlockState;
+import net.minecraft.registry.tag.BlockTags;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
@@ -77,18 +78,33 @@ public final class TreeChopStep {
         FAILED
     }
 
+    private enum TargetKind { LOG, OWN_LEAF }
+
     private final BlockPos target;
     private final TreePlan plan;
+    private final TargetKind targetKind;
 
     /** The block currently being mined (target, or an own-leaf occluder); null when nothing in flight. */
     private BlockPos currentDig;
     /** Whether a {@link CompanionMiningTasks} op for {@link #currentDig} is in flight. */
     private boolean miningStarted;
+    /** True when the in-flight target is an own leaf rather than the planned log. */
+    private boolean currentDigIsOwnLeaf;
     private int leavesCleared;
 
     public TreeChopStep(BlockPos target, TreePlan plan) {
+        this(target, plan, TargetKind.LOG);
+    }
+
+    /** Create a step that may break exactly one currently-natural leaf owned by this plan. */
+    public static TreeChopStep clearOwnLeaf(BlockPos target, TreePlan plan) {
+        return new TreeChopStep(target, plan, TargetKind.OWN_LEAF);
+    }
+
+    private TreeChopStep(BlockPos target, TreePlan plan, TargetKind targetKind) {
         this.target = target;
         this.plan = plan;
+        this.targetKind = targetKind;
     }
 
     /** Advance one tick. See {@link Result}. */
@@ -96,12 +112,30 @@ public final class TreeChopStep {
         World world = companion.getEntityWorld();
 
         // Target already gone (we broke it last tick, or another source did): done.
-        if (world.getBlockState(target).isAir()) {
+        BlockState targetState = world.getBlockState(target);
+        if (targetState.isAir()) {
             return Result.BROKEN;
+        }
+        // The plan captures coordinates, not an immutable world. Never keep mining after another player
+        // or task replaced a planned log/leaf with an unrelated block at the same position.
+        if (targetKind == TargetKind.LOG && !targetState.isIn(BlockTags.LOGS)) {
+            return Result.BLOCKED_BY_FOREIGN;
+        }
+        if (targetKind == TargetKind.OWN_LEAF
+                && (!plan.isOwnLeaf(target) || !TreePlan.isNaturalLeaf(targetState))) {
+            return Result.BLOCKED_BY_FOREIGN;
         }
 
         // A mining op is in flight (on the target or a leaf): poll it, hold aim meanwhile.
         if (miningStarted) {
+            BlockState digState = world.getBlockState(currentDig);
+            if (currentDigIsOwnLeaf && !digState.isAir() && !TreePlan.isNaturalLeaf(digState)) {
+                CompanionMiningTasks.cancel(companion);
+                miningStarted = false;
+                currentDig = null;
+                currentDigIsOwnLeaf = false;
+                return Result.BLOCKED_BY_FOREIGN;
+            }
             if (CompanionMiningTasks.hasTask(companion)) {
                 // Hold the crosshair on what we are mining. Vanilla break reach is orientation
                 // independent, so this is not required for the break to land; it keeps the visible
@@ -114,6 +148,7 @@ public final class TreeChopStep {
             boolean wasTarget = currentDig.equals(target);
             miningStarted = false;
             currentDig = null;
+            currentDigIsOwnLeaf = false;
             if (wasTarget) {
                 // Re-verify the block actually disappeared (a mid-break drift can make vanilla silently
                 // refuse the STOP), rather than trusting the reported result alone.
@@ -155,7 +190,10 @@ public final class TreeChopStep {
             }
             if (hit.getType() == HitResult.Type.BLOCK) {
                 BlockPos hitPos = hit.getBlockPos();
-                if (plan.isOwnLeaf(hitPos)) {
+                // TreePlan freezes which coordinates were own leaves at task start, but the world may
+                // change while the task runs. Never treat a replacement block at such a coordinate as
+                // an owned leaf: it must still be a natural leaf now before we are allowed to clear it.
+                if (plan.isOwnLeaf(hitPos) && TreePlan.isNaturalLeaf(world.getBlockState(hitPos))) {
                     if (ownLeafBlocker == null) {
                         ownLeafBlocker = hitPos.toImmutable();
                     }
@@ -216,6 +254,7 @@ public final class TreeChopStep {
             return Result.FAILED; // became air between check and start, or could not begin
         }
         currentDig = pos;
+        currentDigIsOwnLeaf = !pos.equals(target) || targetKind == TargetKind.OWN_LEAF;
         miningStarted = true;
         return Result.IN_PROGRESS;
     }
@@ -226,6 +265,7 @@ public final class TreeChopStep {
             CompanionMiningTasks.cancel(companion);
             miningStarted = false;
             currentDig = null;
+            currentDigIsOwnLeaf = false;
         }
     }
 }

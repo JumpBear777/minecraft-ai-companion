@@ -11,6 +11,7 @@ import dev.jumpbear.minecraft_ai_companion.task.CompanionTask;
 import dev.jumpbear.minecraft_ai_companion.task.CompanionTaskManager;
 import dev.jumpbear.minecraft_ai_companion.task.FellNaturalTreeTask;
 import dev.jumpbear.minecraft_ai_companion.task.FollowPlayerTask;
+import dev.jumpbear.minecraft_ai_companion.task.HarvestLogsTask;
 import dev.jumpbear.minecraft_ai_companion.task.PillarTestTask;
 import dev.jumpbear.minecraft_ai_companion.task.ReachAndChopTask;
 import dev.jumpbear.minecraft_ai_companion.task.ReachTreeTask;
@@ -72,6 +73,10 @@ import java.util.UUID;
 public final class CompanionDebugCommands {
     private static final Map<UUID, InteractionTestLayout> INTERACTION_TEST_LAYOUTS = new HashMap<>();
     private static final Map<UUID, ToolTestLayout> TOOL_TEST_LAYOUTS = new HashMap<>();
+    /** 整合收木最终测试的配额：攒够这么多根原木即成功（先写死，验证整合流程）。 */
+    private static final int HARVEST_TARGET_LOGS = 64;
+    /** 连续多少轮「收集后 log 总数无增长」即判失败停止（找不到更多树 / 反复够不到）。 */
+    private static final int HARVEST_MAX_BARREN_ROUNDS = 3;
     /**
      * 跨命令保存的树处理测试布局：base（树干根部）+ 有序原木结构 + 砍伐游标。
      * reach_tree 走到位后填入，tree_paint 上色、tree_chop_next 逐段砍伐都读它。
@@ -220,6 +225,12 @@ public final class CompanionDebugCommands {
                         .executes(CompanionDebugCommands::setupTreeShort))
                 .then(CommandManager.literal("setup_tree_cliff")
                         .executes(CompanionDebugCommands::setupTreeCliff))
+                .then(CommandManager.literal("setup_tree_tall")
+                        .executes(CompanionDebugCommands::setupTreeTall))
+                .then(CommandManager.literal("setup_tree_tall_branchy")
+                        .executes(CompanionDebugCommands::setupTreeTallBranchy))
+                .then(CommandManager.literal("setup_tree_field")
+                        .executes(CompanionDebugCommands::setupTreeField))
                 .then(CommandManager.literal("los_test")
                         .executes(CompanionDebugCommands::losTest))
                 .then(CommandManager.literal("tree_plan_show")
@@ -251,6 +262,8 @@ public final class CompanionDebugCommands {
                                 .executes(CompanionDebugCommands::taskChopBase))
                         .then(CommandManager.literal("fell_tree")
                                 .executes(CompanionDebugCommands::taskFellTree))
+                        .then(CommandManager.literal("harvest_logs")
+                                .executes(CompanionDebugCommands::taskHarvestLogs))
                         .then(CommandManager.literal("current")
                                 .executes(CompanionDebugCommands::taskCurrent))
                         .then(CommandManager.literal("status")
@@ -383,7 +396,7 @@ public final class CompanionDebugCommands {
     }
 
     /**
-     * 正式整树砍伐：塞一把铁斧（供「挖前换最快工具」用），指派 {@link FellNaturalTreeTask} 砍倒最近一棵
+     * 正式整树砍伐：塞一把铁斧和两组泥土脚手架，指派 {@link FellNaturalTreeTask} 砍倒最近一棵
      * 可确认归属、可安全到达的自然树，并<b>成功后</b>排队 {@link CollectDroppedItemsTask} 收集木材
      * （{@code enqueueOnSuccess}：砍树失败则不收集、失败状态可见）。诊断仅命令发起者可见。
      */
@@ -396,11 +409,40 @@ public final class CompanionDebugCommands {
 
         ServerPlayerEntity player = companion.get();
         player.giveItemStack(new ItemStack(Items.IRON_AXE));
+        player.giveItemStack(new ItemStack(Items.DIRT, 64));
+        player.giveItemStack(new ItemStack(Items.DIRT, 64));
         CompanionTaskManager.assign(player, new FellNaturalTreeTask(source));
         CompanionTaskManager.enqueueOnSuccess(player, new CollectDroppedItemsTask(player));
-        source.sendFeedback(() -> Text.literal("Task assigned: FellNaturalTree (gave 1 iron axe; fells the "
+        source.sendFeedback(() -> Text.literal("Task assigned: FellNaturalTree (gave 1 iron axe + 128 dirt scaffold; fells the "
                 + "nearest owned+reachable natural tree per-log, then collects wood on success; "
                 + "diagnostics to you only)"), true);
+        return 1;
+    }
+
+    /**
+     * 整合最终测试：攒够木材。塞一把铁斧 + 一批泥土脚手架，指派 {@link HarvestLogsTask}——它跨多棵树循环
+     * 「砍一棵 → 收一次 → 检查背包 log 增量」，攒够 {@value #HARVEST_TARGET_LOGS} 根即成功；连续
+     * {@value #HARVEST_MAX_BARREN_ROUNDS} 轮零进展（找不到更多树 / 反复失败）即诚实失败并报「攒了 X/N」。
+     * 配合 {@code setup_tree_field} 使用。诊断仅命令发起者可见。
+     */
+    private static int taskHarvestLogs(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        Optional<ServerPlayerEntity> companion = requireCompanion(source);
+        if (companion.isEmpty()) {
+            return 0;
+        }
+
+        ServerPlayerEntity player = companion.get();
+        player.giveItemStack(new ItemStack(Items.IRON_AXE));
+        // 多棵树可能各需搭柱，备足脚手架（回收后仍留手上，主要给够不到的高树用）。
+        for (int i = 0; i < 6; i++) {
+            player.giveItemStack(new ItemStack(Items.DIRT, 64));
+        }
+        CompanionTaskManager.assign(player,
+                new HarvestLogsTask(HARVEST_TARGET_LOGS, HARVEST_MAX_BARREN_ROUNDS, source));
+        source.sendFeedback(() -> Text.literal("Task assigned: HarvestLogs (gave 1 iron axe + 384 dirt scaffold; "
+                + "fells+collects tree by tree until " + HARVEST_TARGET_LOGS + " logs are in the inventory, "
+                + "or stops after " + HARVEST_MAX_BARREN_ROUNDS + " barren rounds; diagnostics to you only)"), true);
         return 1;
     }
 
@@ -1775,6 +1817,144 @@ public final class CompanionDebugCommands {
         source.sendFeedback(() -> Text.literal("Tree test STANDARD: cleared arena + 4-log oak at base "
                 + base.toShortString() + " (3 blocks " + facing + "). spawn + task fell_tree."), true);
         return 1;
+    }
+
+    /** High-trunk scenario: verifies one-block-at-a-time pillaring, log felling, and scaffold reclaim. */
+    private static int setupTreeTall(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        ServerWorld world = source.getWorld();
+        BlockPos origin = testOrigin(source);
+        clearArena(world, origin, 10, 20);
+        Direction facing = source.getEntity() instanceof ServerPlayerEntity p ? p.getHorizontalFacing() : Direction.NORTH;
+        BlockPos base = origin.offset(facing, 3);
+        plantPillarTestTree(world, base, 12);
+        source.sendFeedback(() -> Text.literal("Tree test TALL: 12-log pillar-test tree at base " + base.toShortString()
+                + ". Its recognition leaves stay low so the crown cannot become a high foothold. "
+                + "spawn + task fell_tree (expect pillar-up, full felling, then scaffold reclaim)."), true);
+        return 1;
+    }
+
+    /** High main trunk plus high side branches: validates extending the existing scaffold column for branches. */
+    private static int setupTreeTallBranchy(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        ServerWorld world = source.getWorld();
+        BlockPos origin = testOrigin(source);
+        clearArena(world, origin, 10, 20);
+        Direction facing = source.getEntity() instanceof ServerPlayerEntity p ? p.getHorizontalFacing() : Direction.NORTH;
+        Direction right = facing.rotateYClockwise();
+        BlockPos base = origin.offset(facing, 3);
+        plantPillarTestTree(world, base, 12);
+        world.setBlockState(base.up(9).offset(right), Blocks.OAK_LOG.getDefaultState());
+        world.setBlockState(base.up(10).offset(right), Blocks.OAK_LOG.getDefaultState());
+        world.setBlockState(base.up(10).offset(right, 2), Blocks.OAK_LOG.getDefaultState());
+        source.sendFeedback(() -> Text.literal("Tree test TALL_BRANCHY: 12-log trunk + 3 high side logs at "
+                + base.toShortString() + ". spawn + task fell_tree (expect one scaffold column to reach branches, then reclaim)."), true);
+        return 1;
+    }
+
+    /**
+     * A deliberately sparse tree-recognition fixture for the pillar test. Normal crown leaves are solid
+     * enough to become high footholds, which bypasses the pillar branch entirely. Four natural leaves
+     * low beside the trunk satisfy TreeDetector without supplying any standable platform near the top.
+     */
+    private static void plantPillarTestTree(ServerWorld world, BlockPos base, int trunk) {
+        for (int i = 0; i < trunk; i++) {
+            world.setBlockState(base.up(i), Blocks.OAK_LOG.getDefaultState());
+        }
+        BlockState leaf = naturalOakLeaf();
+        world.setBlockState(base.add(2, 0, 0), leaf);
+        world.setBlockState(base.add(-2, 0, 0), leaf);
+        world.setBlockState(base.add(0, 0, 2), leaf);
+        world.setBlockState(base.add(0, 1, -2), leaf);
+    }
+
+    /**
+     * 整合收木最终测试的<b>大混合场景</b>：清出 49×49 石地，在其上撒一片<b>各种状态</b>的树，供
+     * {@code task harvest_logs} 跨多棵砍伐凑够配额。故意覆盖各能力档位并混入一棵<b>应被拒绝的玩家假树</b>
+     * （persistent 叶）：
+     * <ul>
+     *   <li>4 棵标准橡木（trunk 4）——地面可达主力凑数；</li>
+     *   <li>2 棵分叉树（trunk 5 + 2 枝）——验证列排序 / 分叉逐个重规划；</li>
+     *   <li>2 棵矮树（trunk 3）——验证扩张半径落脚；</li>
+     *   <li>2 棵高竖直主干（trunk 12）——触发搭柱升高 + 回收；</li>
+     *   <li>1 棵高主干 + 3 根高侧枝——验证沿同一柱够到高分叉；</li>
+     *   <li>1 棵深色橡木 2×2 粗主干（trunk 6）——多主干 / 邻近原木挡多瞄点；</li>
+     *   <li>1 棵玩家假树（原木 + persistent 叶）——{@link TreeDetector} 应拒绝，验证不误砍、且跳过它
+     *       不会卡住配额循环。</li>
+     * </ul>
+     * 可砍原木总数 ~99（&gt; {@value #HARVEST_TARGET_LOGS}，留富余容错：高粗主干 / 够不到的高枝失败也能凑够）。
+     * 命令回报实际种下的原木总数。
+     */
+    private static int setupTreeField(CommandContext<ServerCommandSource> context) {
+        ServerCommandSource source = context.getSource();
+        ServerWorld world = source.getWorld();
+        BlockPos origin = testOrigin(source);
+        clearArena(world, origin, 24, 20);
+        Direction right = Direction.EAST;
+
+        int logs = 0;
+        // 4 棵标准橡木（trunk 4）——四角散开。
+        int[][] std = {{-18, -18}, {-6, -18}, {6, -18}, {18, -18}};
+        for (int[] p : std) {
+            plantOakTree(world, origin.add(p[0], 0, p[1]), 4);
+            logs += 4;
+        }
+        // 2 棵分叉树（trunk 5 + 2 枝 = 7）。
+        for (int[] p : new int[][]{{-18, -6}, {-18, 8}}) {
+            plantBranchyTree(world, origin.add(p[0], 0, p[1]), 5, right);
+            logs += 7;
+        }
+        // 2 棵矮树（trunk 3）。
+        for (int[] p : new int[][]{{-6, -6}, {-6, 8}}) {
+            plantOakTree(world, origin.add(p[0], 0, p[1]), 3);
+            logs += 3;
+        }
+        // 2 棵高竖直主干（trunk 12）——触发搭柱升高。
+        for (int[] p : new int[][]{{6, -6}, {6, 8}}) {
+            plantPillarTestTree(world, origin.add(p[0], 0, p[1]), 12);
+            logs += 12;
+        }
+        // 1 棵高主干 + 3 根高侧枝（12 + 3 = 15）。
+        BlockPos tallBase = origin.add(18, 0, 8);
+        plantPillarTestTree(world, tallBase, 12);
+        world.setBlockState(tallBase.up(9).offset(right), Blocks.OAK_LOG.getDefaultState());
+        world.setBlockState(tallBase.up(10).offset(right), Blocks.OAK_LOG.getDefaultState());
+        world.setBlockState(tallBase.up(10).offset(right, 2), Blocks.OAK_LOG.getDefaultState());
+        logs += 15;
+        // 1 棵深色橡木 2×2 粗主干（trunk 6 → 4 列 × 6 = 24）。
+        plantDarkOakTree(world, origin.add(18, 0, -6), 6, right);
+        logs += 24;
+        // 1 棵玩家假树（persistent 叶）——应被 TreeDetector 拒绝，不计入可砍数。
+        plantPlayerBuiltDecoy(world, origin.add(0, 0, 18), 4);
+
+        final int plantedLogs = logs;
+        source.sendFeedback(() -> Text.literal("Tree test FIELD: cleared 49x49 arena at " + origin.toShortString()
+                + "; planted " + plantedLogs + " harvestable logs across 12 mixed trees (+1 player-built decoy "
+                + "that should be rejected). Target is " + HARVEST_TARGET_LOGS + ". spawn + task harvest_logs."), true);
+        return 1;
+    }
+
+    /**
+     * 一棵<b>玩家搭建的假树</b>：原木列 + <b>persistent（永不衰减）</b>橡木叶。{@link TreeDetector} 只认自然叶
+     * （persistent=false）作为「这是真树」的依据，故此物应被<b>拒绝</b>——用来验证同伴不会误砍装饰建筑。
+     */
+    private static void plantPlayerBuiltDecoy(ServerWorld world, BlockPos base, int trunk) {
+        for (int i = 0; i < trunk; i++) {
+            world.setBlockState(base.up(i), Blocks.OAK_LOG.getDefaultState());
+        }
+        BlockState persistentLeaf = Blocks.OAK_LEAVES.getDefaultState()
+                .with(net.minecraft.block.LeavesBlock.PERSISTENT, true);
+        BlockPos crown = base.up(trunk - 1);
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                for (int dy = 0; dy <= 1; dy++) {
+                    BlockPos p = crown.add(dx, dy, dz);
+                    if (world.getBlockState(p).isAir()) {
+                        world.setBlockState(p, persistentLeaf);
+                    }
+                }
+            }
+        }
     }
 
     /**

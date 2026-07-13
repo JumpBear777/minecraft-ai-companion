@@ -1,13 +1,18 @@
 package dev.jumpbear.minecraft_ai_companion.task;
 
 import dev.jumpbear.minecraft_ai_companion.CompanionInputController;
+import dev.jumpbear.minecraft_ai_companion.CompanionMiningTasks;
+import net.minecraft.block.Block;
+import net.minecraft.block.BlockState;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
 
@@ -40,9 +45,19 @@ import java.util.Optional;
  * 射线先命中「快照内、确认归属」的叶只清那一片（{@link TreeChopStep} 有界反应式清叶）；命中其它任何方块
  * 立即停该路径，<b>绝不</b>自动挖遮挡物（不学 Numen「任意障碍可挖」）。
  *
- * <h2>范围（第一阶段）</h2>
- * 只做<b>地面可达</b>的逐原木流程：普通树、分支树、多主干树。超过交互高度、需要 {@link CompanionPillar}
- * 搭柱才能够到的树干留待<b>第二阶段</b>——本任务此时对够不到的高处原木诚实记失败，不建桥、不挖隧道。
+ * <h2>够不到的高处主干：搭柱升高（第二阶段）</h2>
+ * 当某块主干原木<b>因高度够不到</b>（候选耗尽且最后原因是 out-of-reach，或压根无地面落脚点 no-foothold），
+ * 且同伴此刻已站在一个稳定落脚列上时，进入 {@link Phase#PILLAR}：用已验证的 {@link CompanionPillar} 在
+ * <b>脚下这一列</b>原地搭一格脚手架升高，把实际放下的坐标记进栈，再回 {@link Phase#CHOP} 重试当前原木——
+ * 升到够得到为止，最多 {@link #MAX_PILLAR_LEVELS} 级（防畸形树无限叠柱）。整树处理完后进入
+ * {@link Phase#RECLAIM}：从栈顶（最高、最后搭的）向下把自己搭的脚手架逐块挖回（真玩家式回收，不留残柱），
+ * 挖前校验该位仍是脚手架方块（不盲信记忆）。脚手架方块来自背包（{@link CompanionHotbar#selectScaffoldBlock}，
+ * 只认满方块）；调用方负责备料。
+ *
+ * <h2>范围</h2>
+ * 主干列先建立一根脚手架柱；同伴仍站在这根柱顶时，高处分叉也可继续沿<b>同一列</b>升高后重试。
+ * <b>需要离开该列、另起一根柱或横向搭桥的孤立高处分叉</b>仍诚实记失败。不建桥、不挖隧道、
+ * 不跨列横移搭柱、不「任意障碍可挖」。
  */
 public final class FellNaturalTreeTask implements CompanionTask {
 
@@ -50,11 +65,19 @@ public final class FellNaturalTreeTask implements CompanionTask {
     private static final int REACH_DISTANCE = 1;
     /** 单个候选的导航超时（tick）：走不到就换下一候选，不无限走。 */
     private static final int NAVIGATE_TIMEOUT_TICKS = 200;
+    /** 单块原木最多为它搭多少级柱（防对畸形高树无限叠柱）。到顶仍够不到即记失败。 */
+    private static final int MAX_PILLAR_LEVELS = 8;
+    /** Per pillar level, clear at most this many own leaves from the vertical jump clearance. */
+    private static final int MAX_PILLAR_CLEAR_LEAVES = 2;
 
-    private enum Phase { CHOP, NAVIGATE, DONE }
+    private enum Phase { CHOP, NAVIGATE, PILLAR_CLEAR, PILLAR, RECLAIM, DONE }
 
     /** 一块残留原木及其失败原因（供诊断/测试断言）。 */
     private record LogFailure(BlockPos log, String reason) {
+    }
+
+    /** A scaffold block this task actually placed, including its original block type for safe reclaim. */
+    private record ScaffoldBlock(BlockPos pos, Block block) {
     }
 
     /** 可选诊断输出目标；仅命令发起者可见。为 null 时静默（正式行为默认不喧哗）。 */
@@ -80,7 +103,22 @@ public final class FellNaturalTreeTask implements CompanionTask {
     private TreeChopStep step;
     private int navigateTicks;
 
+    /** 搭柱升高适配器（懒建）。 */
+    private CompanionPillar pillar;
+    /** 本任务实际搭下的每一格脚手架，自底向上入栈；RECLAIM 阶段自顶向下确认并挖回。 */
+    private final Deque<ScaffoldBlock> placedScaffold = new ArrayDeque<>();
+    /** 唯一允许搭柱的水平列。先由 base 主干建立，之后高处分叉只能从此列继续升高。 */
+    private BlockPos pillarColumn;
+    /** 当前原木已为它搭了几级柱（每换一块原木清零）。 */
+    private int pillarLevels;
+    /** A single own-leaf clear currently in progress before starting this pillar level. */
+    private TreeChopStep pillarClearStep;
+    private int pillarLeavesCleared;
+    /** RECLAIM 阶段：当前正在挖回的脚手架块（等挖掘异步完成）。 */
+    private ScaffoldBlock reclaiming;
+
     private final List<LogFailure> failures = new ArrayList<>();
+    private final List<String> reclaimFailures = new ArrayList<>();
 
     public FellNaturalTreeTask() {
         this(null);
@@ -115,19 +153,25 @@ public final class FellNaturalTreeTask implements CompanionTask {
         }
         World world = companion.getEntityWorld();
 
-        // 推进到下一块仍存在的待砍原木。
-        while (logIndex < plan.orderedLogs().size()
-                && world.getBlockState(plan.orderedLogs().get(logIndex)).isAir()) {
-            logIndex++;
-            resetPerLog();
-        }
-        if (logIndex >= plan.orderedLogs().size()) {
-            return finishTask(world);
+        // 推进到下一块仍存在的待砍原木。（RECLAIM/DONE 阶段不推进——它们不再处理原木。）
+        if (phase != Phase.RECLAIM && phase != Phase.DONE) {
+            while (logIndex < plan.orderedLogs().size()
+                    && world.getBlockState(plan.orderedLogs().get(logIndex)).isAir()) {
+                logIndex++;
+                resetPerLog();
+            }
+            if (logIndex >= plan.orderedLogs().size()) {
+                // 所有原木处理完：若搭过柱先回收，否则直接收尾。
+                phase = placedScaffold.isEmpty() ? Phase.DONE : Phase.RECLAIM;
+            }
         }
 
         return switch (phase) {
             case CHOP -> tickChop(companion);
             case NAVIGATE -> tickNavigate(companion);
+            case PILLAR_CLEAR -> tickPillarClear(companion);
+            case PILLAR -> tickPillar(companion);
+            case RECLAIM -> tickReclaim(companion);
             case DONE -> finishTask(world);
         };
     }
@@ -185,11 +229,222 @@ public final class FellNaturalTreeTask implements CompanionTask {
             lastReason = "no-path";
         }
 
-        // 候选耗尽：记录失败原因，继续下一块原木。
+        // 候选耗尽。若失败是因为「够不到高处」且同伴已站在稳定落脚列上，尝试搭柱升高再重试当前原木；
+        // 否则记失败、继续下一块。
+        if (canTryPillar(companion, currentLog)) {
+            return enterPillar(companion, currentLog);
+        }
         failures.add(new LogFailure(currentLog, lastReason));
         diag("log " + currentLog.toShortString() + " FAIL: " + lastReason + " (candidates exhausted)");
         logIndex++;
         resetPerLog();
+        return TaskStatus.RUNNING;
+    }
+
+    /**
+     * 是否值得为当前原木搭柱升高：失败原因是「够不到高处 / 无地面落脚点」（而非被挡/无路径），
+     * 目标原木确实高于同伴当前脚位，且尚未达到搭柱级数上限。首根柱只能为 base 主干建立；
+     * 之后高处分叉仅当同伴仍在该柱顶时可继续升高。被非本树方块挡、无路径、需要另起柱的分叉
+     * 不该靠搭柱解决。
+     */
+    private boolean canTryPillar(ServerPlayerEntity companion, BlockPos currentLog) {
+        boolean reachReason = "out-of-reach".equals(lastReason) || "no-foothold".equals(lastReason);
+        boolean logIsAbove = currentLog.getY() > companion.getBlockY();
+        if (!reachReason || !logIsAbove || pillarLevels >= MAX_PILLAR_LEVELS || !companion.isOnGround()) {
+            return false;
+        }
+        if (pillarColumn == null) {
+            return currentLog.getX() == plan.base().getX() && currentLog.getZ() == plan.base().getZ();
+        }
+        return companion.getBlockX() == pillarColumn.getX() && companion.getBlockZ() == pillarColumn.getZ();
+    }
+
+    /** Enter the bounded clearance phase before beginning the next pillar level. */
+    private TaskStatus enterPillar(ServerPlayerEntity companion, BlockPos currentLog) {
+        if (pillar == null) {
+            pillar = new CompanionPillar(companion);
+        }
+        pillarClearStep = null;
+        pillarLeavesCleared = 0;
+        phase = Phase.PILLAR_CLEAR;
+        diag("log " + currentLog.toShortString() + " out of reach; checking pillar clearance (level "
+                + (pillarLevels + 1) + "/" + MAX_PILLAR_LEVELS + ")");
+        return TaskStatus.RUNNING;
+    }
+
+    /**
+     * Ensure the two blocks above the companion's feet are clear enough for the verified jump-and-place
+     * adapter. Only a live natural leaf recorded in this TreePlan may be cleared; any other collision
+     * remains a hard stop rather than an invitation to tunnel through a build or another tree.
+     */
+    private TaskStatus tickPillarClear(ServerPlayerEntity companion) {
+        BlockPos currentLog = plan.orderedLogs().get(logIndex);
+        if (pillarClearStep != null) {
+            TreeChopStep.Result result = pillarClearStep.tick(companion);
+            switch (result) {
+                case IN_PROGRESS -> {
+                    return TaskStatus.RUNNING;
+                }
+                case BROKEN -> {
+                    pillarLeavesCleared++;
+                    pillarClearStep = null;
+                    return TaskStatus.RUNNING;
+                }
+                default -> {
+                    return failPillar(companion, currentLog, "pillar-clear-blocked");
+                }
+            }
+        }
+
+        BlockPos feet = companion.getBlockPos();
+        BlockPos blocker = firstPillarClearanceBlocker(companion, feet);
+        if (blocker == null) {
+            return beginPillar(companion, currentLog);
+        }
+        BlockState state = companion.getEntityWorld().getBlockState(blocker);
+        if (pillarLeavesCleared >= MAX_PILLAR_CLEAR_LEAVES
+                || !plan.isOwnLeaf(blocker)
+                || !TreePlan.isNaturalLeaf(state)) {
+            return failPillar(companion, currentLog, "pillar-blocked");
+        }
+        pillarClearStep = TreeChopStep.clearOwnLeaf(blocker, plan);
+        return TaskStatus.RUNNING;
+    }
+
+    /** @return the first solid block obstructing the vertical jump body space, or null if clear. */
+    private static BlockPos firstPillarClearanceBlocker(ServerPlayerEntity companion, BlockPos feet) {
+        World world = companion.getEntityWorld();
+        for (int dy = 1; dy <= 2; dy++) {
+            BlockPos pos = feet.up(dy);
+            if (!world.getBlockState(pos).getCollisionShape(world, pos).isEmpty()) {
+                return pos;
+            }
+        }
+        return null;
+    }
+
+    /** Select a safe scaffold block and begin exactly one verified pillar level. */
+    private TaskStatus beginPillar(ServerPlayerEntity companion, BlockPos currentLog) {
+        if (!CompanionHotbar.selectScaffoldBlock(companion)) {
+            return failPillar(companion, currentLog, "no-scaffold");
+        }
+        if (pillarColumn == null) {
+            pillarColumn = new BlockPos(companion.getBlockX(), 0, companion.getBlockZ());
+        }
+        pillar.begin(1); // 一次升一级，升完回 CHOP 重试当前原木
+        phase = Phase.PILLAR;
+        diag("log " + currentLog.toShortString() + " out of reach; pillaring up (level "
+                + (pillarLevels + 1) + "/" + MAX_PILLAR_LEVELS + ")");
+        return TaskStatus.RUNNING;
+    }
+
+    /** Record a pillar failure and continue with the remaining planned logs. */
+    private TaskStatus failPillar(ServerPlayerEntity companion, BlockPos currentLog, String reason) {
+        if (pillar != null) {
+            pillar.stop();
+        }
+        if (pillarClearStep != null) {
+            pillarClearStep.cancel(companion);
+            pillarClearStep = null;
+        }
+        lastReason = reason;
+        failures.add(new LogFailure(currentLog, reason));
+        diag("log " + currentLog.toShortString() + " FAIL: " + reason);
+        logIndex++;
+        resetPerLog();
+        return TaskStatus.RUNNING;
+    }
+
+    /** 搭一级柱：升完记录实际放下的坐标、回 CHOP 重试当前原木；放置失败记原因继续下一块。 */
+    private TaskStatus tickPillar(ServerPlayerEntity companion) {
+        BlockPos currentLog = plan.orderedLogs().get(logIndex);
+        CompanionPillar.PillarResult result = pillar.tick();
+        // 每完成一级，lastPlacedPos 指向新坐标；与栈顶不同即入栈（柱自底向上，坐标不重复）。
+        BlockPos last = pillar.lastPlacedPos();
+        if (last != null && (placedScaffold.peek() == null || !last.equals(placedScaffold.peek().pos()))) {
+            BlockState placed = companion.getEntityWorld().getBlockState(last);
+            if (!placed.isAir()) {
+                placedScaffold.push(new ScaffoldBlock(last, placed.getBlock()));
+            }
+        }
+        switch (result) {
+            case RISING, IDLE -> {
+                return TaskStatus.RUNNING;
+            }
+            case DONE -> {
+                pillar.stop();
+                pillarLevels++;
+                // 回 CHOP 重试当前原木（保留 pillarLevels，但候选要重算——站位变了）。
+                candidates = null;
+                candidatesComputed = false;
+                candidateIndex = 0;
+                step = null;
+                phase = Phase.CHOP;
+                return TaskStatus.RUNNING;
+            }
+            case FAILED -> {
+                return failPillar(companion, currentLog, "pillar-placement-blocked");
+            }
+        }
+        return TaskStatus.RUNNING;
+    }
+
+    /**
+     * 回收自己搭的脚手架：从栈顶（最高、最后搭的）向下逐块挖回。同伴此刻站在柱顶，挖掉脚下方块后靠 vanilla
+     * 重力自然下降一格，再挖下一块。挖前校验该位仍是「非空气」（脚手架还在），对不上就跳过——不盲信记忆。
+     */
+    private TaskStatus tickReclaim(ServerPlayerEntity companion) {
+        World world = companion.getEntityWorld();
+
+        // 有挖掘在进行：等它完成。
+        if (reclaiming != null) {
+            if (CompanionMiningTasks.hasTask(companion)) {
+                return TaskStatus.RUNNING;
+            }
+            CompanionMiningTasks.MiningResult result = CompanionMiningTasks.pollResult(companion);
+            ScaffoldBlock completed = reclaiming;
+            reclaiming = null;
+            if (result != CompanionMiningTasks.MiningResult.BROKEN
+                    || !world.getBlockState(completed.pos()).isAir()) {
+                reclaimFailures.add(completed.pos().toShortString() + ": mining failed");
+                diag("reclaim failed: " + completed.pos().toShortString());
+            }
+            placedScaffold.pop();
+        }
+        if (placedScaffold.isEmpty()) {
+            phase = Phase.DONE;
+            return finishTask(world);
+        }
+
+        ScaffoldBlock scaffold = placedScaffold.peek();
+        BlockPos pos = scaffold.pos();
+        // 已是空气（被别处清掉/记忆脱节）：跳过。
+        if (world.getBlockState(pos).isAir()) {
+            placedScaffold.pop();
+            return TaskStatus.RUNNING;
+        }
+        // A player or another task may have replaced our dirt/cobble while the tree task was running.
+        // Do not mine the replacement; record it and leave it untouched.
+        if (!world.getBlockState(pos).isOf(scaffold.block())) {
+            reclaimFailures.add(pos.toShortString() + ": scaffold replaced");
+            diag("reclaim skip (replaced): " + pos.toShortString());
+            placedScaffold.pop();
+            return TaskStatus.RUNNING;
+        }
+        // 够不到（同伴不在柱顶、该块在头顶外）：立即跳过，不启动注定超时的挖掘。留残柱会在诊断里报告。
+        if (!companion.canInteractWithBlockAt(pos, 1.0D)) {
+            diag("reclaim skip (out of reach): " + pos.toShortString());
+            reclaimFailures.add(pos.toShortString() + ": out of reach");
+            placedScaffold.pop();
+            return TaskStatus.RUNNING;
+        }
+        CompanionInputController.lookAt(companion, pos.toCenterPos());
+        if (!CompanionMiningTasks.start(companion, pos)) {
+            reclaimFailures.add(pos.toShortString() + ": could not start mining");
+            placedScaffold.pop();
+            return TaskStatus.RUNNING;
+        }
+        reclaiming = scaffold;
         return TaskStatus.RUNNING;
     }
 
@@ -232,7 +487,8 @@ public final class FellNaturalTreeTask implements CompanionTask {
             }
         }
         if (residual.isEmpty()) {
-            diag("DONE: all " + plan.orderedLogs().size() + " logs felled");
+            diag("DONE: all " + plan.orderedLogs().size() + " logs felled"
+                    + (reclaimFailures.isEmpty() ? "" : "; scaffold residuals=" + reclaimFailures));
             return TaskStatus.SUCCESS;
         }
         diag("DONE with FAILURE: " + residual.size() + "/" + plan.orderedLogs().size()
@@ -246,6 +502,9 @@ public final class FellNaturalTreeTask implements CompanionTask {
         candidateIndex = 0;
         lastReason = "unreached";
         step = null;
+        pillarLevels = 0;
+        pillarClearStep = null;
+        pillarLeavesCleared = 0;
         phase = Phase.CHOP;
     }
 
@@ -271,11 +530,18 @@ public final class FellNaturalTreeTask implements CompanionTask {
             step.cancel(companion);
             step = null;
         }
+        if (pillar != null) {
+            pillar.stop();
+        }
+        if (pillarClearStep != null) {
+            pillarClearStep.cancel(companion);
+            pillarClearStep = null;
+        }
         if (navigator != null) {
             navigator.stop();
             navigator.dispose();
         }
-        dev.jumpbear.minecraft_ai_companion.CompanionMiningTasks.cancel(companion);
+        CompanionMiningTasks.cancel(companion);
         CompanionInputController.releaseInput(companion);
     }
 
