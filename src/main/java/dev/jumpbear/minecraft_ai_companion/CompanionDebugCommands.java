@@ -12,9 +12,11 @@ import dev.jumpbear.minecraft_ai_companion.task.CompanionTaskManager;
 import dev.jumpbear.minecraft_ai_companion.task.FellNaturalTreeTask;
 import dev.jumpbear.minecraft_ai_companion.task.FollowPlayerTask;
 import dev.jumpbear.minecraft_ai_companion.task.HarvestLogsTask;
+import dev.jumpbear.minecraft_ai_companion.task.MiningHazard;
 import dev.jumpbear.minecraft_ai_companion.task.PillarTestTask;
 import dev.jumpbear.minecraft_ai_companion.task.ReachAndChopTask;
 import dev.jumpbear.minecraft_ai_companion.task.ReachTreeTask;
+import dev.jumpbear.minecraft_ai_companion.task.SafeDescentTask;
 import dev.jumpbear.minecraft_ai_companion.task.TreeApproach;
 import dev.jumpbear.minecraft_ai_companion.task.TreeChopSight;
 import dev.jumpbear.minecraft_ai_companion.task.TreeDetector;
@@ -77,6 +79,8 @@ public final class CompanionDebugCommands {
     private static final int HARVEST_TARGET_LOGS = 64;
     /** 连续多少轮「收集后 log 总数无增长」即判失败停止（找不到更多树 / 反复够不到）。 */
     private static final int HARVEST_MAX_BARREN_ROUNDS = 3;
+    /** {@code /aicompanion task mine} 不带参时的默认目标层（钻石富集层附近）。 */
+    private static final int DEFAULT_MINE_TARGET_Y = -59;
     /**
      * 跨命令保存的树处理测试布局：base（树干根部）+ 有序原木结构 + 砍伐游标。
      * reach_tree 走到位后填入，tree_paint 上色、tree_chop_next 逐段砍伐都读它。
@@ -264,6 +268,10 @@ public final class CompanionDebugCommands {
                                 .executes(CompanionDebugCommands::taskFellTree))
                         .then(CommandManager.literal("harvest_logs")
                                 .executes(CompanionDebugCommands::taskHarvestLogs))
+                        .then(CommandManager.literal("mine")
+                                .executes(ctx -> taskMine(ctx, DEFAULT_MINE_TARGET_Y))
+                                .then(CommandManager.argument("targetY", IntegerArgumentType.integer(-64, 320))
+                                        .executes(ctx -> taskMine(ctx, IntegerArgumentType.getInteger(ctx, "targetY")))))
                         .then(CommandManager.literal("current")
                                 .executes(CompanionDebugCommands::taskCurrent))
                         .then(CommandManager.literal("status")
@@ -443,6 +451,27 @@ public final class CompanionDebugCommands {
         source.sendFeedback(() -> Text.literal("Task assigned: HarvestLogs (gave 1 iron axe + 384 dirt scaffold; "
                 + "fells+collects tree by tree until " + HARVEST_TARGET_LOGS + " logs are in the inventory, "
                 + "or stops after " + HARVEST_MAX_BARREN_ROUNDS + " barren rounds; diagnostics to you only)"), true);
+        return 1;
+    }
+
+    /**
+     * 挖矿第一阶段：安全下挖到目标层。塞一把镐（钻石镐，够快且能挖深层矿石），指派 {@link SafeDescentTask}——
+     * 它挖一条斜向 1×2 阶梯下到脚部 Y ≤ targetY，动手前每级用 {@link MiningHazard} 门控，遇矿洞/岩浆/水/
+     * 头顶下落方块即停下并诚实报告。诊断仅命令发起者可见。
+     */
+    private static int taskMine(CommandContext<ServerCommandSource> context, int targetY) {
+        ServerCommandSource source = context.getSource();
+        Optional<ServerPlayerEntity> companion = requireCompanion(source);
+        if (companion.isEmpty()) {
+            return 0;
+        }
+
+        ServerPlayerEntity player = companion.get();
+        player.giveItemStack(new ItemStack(Items.DIAMOND_PICKAXE));
+        CompanionTaskManager.assign(player, new SafeDescentTask(targetY, source));
+        source.sendFeedback(() -> Text.literal("Task assigned: SafeDescent (gave 1 diamond pickaxe; digs a "
+                + "1x2 staircase down to feet Y=" + targetY + ", stopping and reporting if it would breach a "
+                + "cave/lava/water/gravity hazard; diagnostics to you only)"), true);
         return 1;
     }
 
